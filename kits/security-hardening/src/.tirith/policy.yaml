@@ -1,0 +1,51 @@
+# Tirith security policy
+# Documentation: https://tirith.dev/docs/policy
+
+# Fail mode: "open" (allow on error) or "closed" (block on error)
+fail_mode: open
+
+# Paranoia level (1-4): higher = more sensitive detection
+paranoia: 1
+
+# Allow TIRITH=0 bypass in interactive terminals
+allow_bypass_env: true
+
+# Require explicit acknowledgement for warn findings in interactive mode
+strict_warn: false
+
+# Severity overrides per rule (e.g., shortened_url: LOW)
+severity_overrides: {}
+
+# URL patterns to always allow
+allowlist: []
+
+# URL patterns to always block (overrides allowlist)
+blocklist: []
+
+# Glob patterns to ignore during scan
+scan:
+  ignore_patterns: []
+
+# Custom rules: user-defined regex patterns
+# These fire the custom_rule_match rule when matched
+custom_rules:
+  - id: inline_ssh_password
+    title: "Inline SSH password via sshpass"
+    description: "Password passed directly on the command line via sshpass -p — visible to ps aux, shell history, and system logs."
+    severity: HIGH
+    pattern: sshpass\s+-p
+    action: block
+
+  - id: inline_curl_basic_auth
+    title: "Inline HTTP Basic Auth credential"
+    description: "Username:password passed directly on the command line via curl -u. Visible to ps aux, shell history, and proxy logs."
+    severity: HIGH
+    pattern: curl\s+.*-u\s+[^\s]+:[^\s]+
+    action: block
+
+  - id: inline_env_credential
+    title: "Inline credential in environment variable"
+    description: "API key, password, token, or secret set inline on the same command line. Visible to ps aux and shell history."
+    severity: MEDIUM
+    pattern: (?:PASSWORD|PASS|SECRET|TOKEN|API_KEY|API_SECRET|ACCESS_KEY)=\S+
+    action: warn
