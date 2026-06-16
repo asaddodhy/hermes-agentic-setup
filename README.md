@@ -20,6 +20,12 @@
 7. [Usage Guide](#7-usage-guide)
 8. [Troubleshooting](#8-troubleshooting)
 9. [Security Notes](#9-security-notes)
+10. [Security Hardening (June 2026)](#10-security-hardening-june-2026)
+    - [Tirith Custom Rules](#102-tirith-custom-rules)
+    - [Smart Approvals Mode](#103-smart-approvals-mode)
+    - [Secure-Credentials Skill](#104-secure-credentials-skill)
+    - [Agent Memory](#105-agent-memory)
+    - [Migrating to Another Machine](#106-migrating-to-another-machine)
 
 ---
 
@@ -406,3 +412,126 @@ hermes mcp add mb14 --command ssh --args asadpreuss-dodhy@192.168.1.200 \
 - **The API Server default host is `127.0.0.1`** (localhost-only). We set it to `0.0.0.0` to allow LAN access. If only Tailscale access is needed, bind it to mb14's Tailscale IP for better security.
 - **Command approval** on mb14 can block non-interactive API calls. Either run gateway with `--accept-hooks` (which auto-approves shell hooks) or keep approvals on and be prepared to approve requests on mb14's screen.
 - **Profile isolation** means the MCP server configuration is specific to the team-manager profile on mb16. Other profiles won't have access unless explicitly configured.
+
+---
+
+## 10. Security Hardening (June 2026)
+
+A multi-layer security hardening was applied to prevent inline credential exposure and enforce security best practices across all Hermes sessions.
+
+### 10.1 Overview
+
+Four layers of protection work together:
+
+```
+  Agent Memory  ─── behavioral guard (this session + future)
+  Secure-Credentials Skill ─── reference + system prompt extension
+  Tirith Policy  ─── enforcement at command execution (block/warn)
+  Smart Approvals ─── AI-aided catch for anything the regex misses
+```
+
+### 10.2 Tirith Custom Rules
+
+**Policy file:** `~/.tirith/policy.yaml`
+
+Custom rules added to the default Tirith security scanner:
+
+| Rule | Pattern | Action |
+|------|---------|--------|
+| `inline_ssh_password` | `sshpass -p` followed by password | **BLOCK** |
+| `inline_curl_basic_auth` | `curl -u user:password` | **BLOCK** |
+| `inline_env_credential` | `PASSWORD=`, `SECRET=`, `API_KEY=`, etc. inline | **WARN** |
+
+Tirith's built-in rules (always active) also catch:
+- `curl | bash` / `wget | bash` (pipe-to-interpreter)
+- Known credential patterns (AWS keys, GitHub tokens, etc.)
+- High-entropy secrets near keywords
+- Homograph URLs, terminal injection, ANSI escape attacks
+- Cloud metadata endpoint access
+- Private key exposure
+
+#### Verifying Tirith is working
+
+```bash
+# Check tirith is installed
+ls -la ~/.hermes/bin/tirith
+
+# Test an inline password (should be BLOCKED)
+~/.hermes/bin/tirith check "sshpass -p secret123 ssh user@host"
+
+# Test normal SSH (should be ALLOWED)
+~/.hermes/bin/tirith check "ssh user@host ls"
+
+# Validate the policy
+~/.hermes/bin/tirith policy validate
+```
+
+#### Policy file location
+
+Tirith auto-discovers `.tirith/policy.yaml` by walking up from the current directory. The home policy at `~/.tirith/policy.yaml` is always found when commands run from `~` or any directory beneath it.
+
+### 10.3 Smart Approvals Mode
+
+Both profiles now use `approvals.mode: smart`:
+
+```yaml
+approvals:
+  mode: smart          # LLM-assisted risk assessment
+  timeout: 60
+```
+
+When a command is flagged by either Tirith or the built-in DANGEROUS_PATTERNS detector, the auxiliary LLM assesses the risk. Low-risk commands are auto-approved; high-risk ones prompt the user for confirmation.
+
+**To apply after config change:** Start a new session (`/reset` or new `hermes` invocation).
+
+### 10.4 Secure-Credentials Skill
+
+The `secure-credentials` skill documents security best practices and is loaded automatically when relevant in any session:
+
+- **Never** put credentials on the command line (SSH keys, `.my.cnf`, `.netrc`, env files instead)
+- **Never** hardcode secrets in source code or commit them to git
+- **Never** bind services to `0.0.0.0` unnecessarily
+- **Never** pipe `curl | bash` without review
+- Always use minimal file permissions (`600` for secrets, `755`/`644` for normal files)
+- Always use HTTPS for sensitive data
+
+Available in both the default and team-manager profiles.
+
+```bash
+# Load it explicitly
+hermes -s secure-credentials
+
+# Or in-session
+/skill secure-credentials
+```
+
+### 10.5 Agent Memory
+
+The agent's persistent memory includes a security-first directive that applies to every response:
+- No inline passwords or credentials in command strings
+- No unsafe curl|bash or pipe-to-interpreter patterns
+- No unnecessary network exposure
+- Always prefer the safe alternative without being told
+
+This is active in the current session and all future sessions on the default profile.
+
+### 10.6 Migrating to Another Machine
+
+If cloning this setup to a new machine:
+
+```bash
+# 1. Copy the Tirith policy
+mkdir -p ~/.tirith
+cp path/to/backup/.tirith/policy.yaml ~/.tirith/
+
+# 2. Set approvals mode
+hermes config set approvals.mode smart
+
+# 3. Copy the skill
+cp -r path/to/backup/.hermes/skills/software-development/secure-credentials \
+  ~/.hermes/skills/software-development/secure-credentials
+
+# 4. Install tirith (auto-downloaded on first terminal command)
+# or manually:
+~/.hermes/bin/tirith policy validate
+```
