@@ -36,19 +36,21 @@ Two connection methods:
 
 ## Kits — Complete Inventory
 
-All kits are under `kits/`. Each is a self-contained `kit.md` with YAML frontmatter + step-by-step workflow. Run them in order for a full restoration.
+All kits are under `kits/`. Each is a self-contained `kit.md` with YAML frontmatter + step-by-step workflow. Run them in restoration order (see below) for a full setup.
 
+<!-- KIT-TABLE:START -->
 | # | Kit | What it does | Dependencies | Backup status |
-|---|-----|-------------|--------------|--------------|
-| 1 | **[Hermes Install](kits/hermes-install/kit.md)** | Install Hermes Agent v0.16.0, Python 3.11, Tirith | — | ✅ Can reinstall from pip |
-| 2 | **[Hermes Profiles](kits/hermes-profiles/kit.md)** | Create all 3 profiles (default, novelist, team-manager) with configs, skills, SOUL.md, AGENTS.md | Kit 1 | ✅ Tarball-able |
-| 3 | **[Model Providers](kits/model-providers/kit.md)** | Set up Copilot (gpt-5-mini) and OpenCode Zen (deepseek-v4-flash-free), auth, .env | Kit 1 | 🔶 Needs re-auth |
-| 4 | **[Novel-OS](kits/novel-os/kit.md)** | Install Novel-OS writing platform, venv, story state, novelist profile integration | Kit 1, 2 | ✅ Tarball-able (350 MB) |
-| 5 | **[Tailscale Userspace](kits/tailscale-userspace/kit.md)** | Tailscale daemon in userspace mode, mesh between mb16 ↔ mb14 | — | 🔶 Needs re-auth |
-| 6 | **[SSH Key Auth](kits/ssh-key-auth/kit.md)** | SSH key pair, deploy to mb14, passwordless login | Kit 5 | ✅ Tarball-able |
-| 7 | **[MCP Remote Bridge](kits/hermes-mcp-bridge/kit.md)** | MCP server `mb14` in team-manager profile, 10 messaging tools | Kits 5, 6 | ✅ Tarball-able |
-| 8 | **[API Server](kits/hermes-api-server/kit.md)** | Remote Hermes API server on mb14, OpenAI-compatible HTTP | Kits 5, 6 | 🔶 Needs re-deploy |
-| 9 | **[Security Hardening](kits/security-hardening/kit.md)** | Tirith custom rules, smart approvals, secure-credentials skill | Kit 1 | ✅ Tarball-able |
+|---|---|---|---|---|
+| 1 | **[hermes-api-server](kits/hermes-api-server/kit.md)** | Deploy a remote Hermes Agent API server exposing an OpenAI-compatible HTTP AP... | | |
+| 2 | **[hermes-install](kits/hermes-install/kit.md)** | Install Hermes Agent from scratch on a new macOS machine — pip, pipx, or Home... | | |
+| 3 | **[hermes-mcp-remote-bridge](kits/hermes-mcp-bridge/kit.md)** | Bridge two Hermes Agent instances over SSH stdio via the MCP protocol — givin... | | |
+| 4 | **[hermes-profiles](kits/hermes-profiles/kit.md)** | Set up all 3 Hermes profiles (default, novelist, team-manager) with their uni... | | |
+| 5 | **[model-providers](kits/model-providers/kit.md)** | Document and restore all Hermes model provider configurations — Copilot (GitH... | | |
+| 6 | **[novel-os](kits/novel-os/kit.md)** | Install, restore, and integrate Novel-OS — a multi-agent fiction writing fram... | | |
+| 7 | **[security-hardening-suite](kits/security-hardening/kit.md)** | Lock down a Hermes Agent with Tirith custom rules, smart approvals mode, and ... | | |
+| 8 | **[ssh-key-auth](kits/ssh-key-auth/kit.md)** | Set up SSH key-based authentication between two machines for cross-machine He... | | |
+| 9 | **[tailscale-userspace](kits/tailscale-userspace/kit.md)** | Set up Tailscale in userspace (no-root) mode for cross-machine Hermes agent m... | | |
+<!-- KIT-TABLE:END -->
 
 ### What each icon means for restoration:
 - ✅ **Tarball-able** — files can be copied from the backup archive directly

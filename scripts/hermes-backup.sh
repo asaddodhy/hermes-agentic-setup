@@ -1,6 +1,7 @@
 #!/bin/bash
-# Hermes Repo Backup Script
-# Invoked by the hermes-repo-backup skill, or standalone.
+# Hermes Repo Backup Script — v2 (convention-driven)
+# Reads paths to back up from discover-paths.sh (or a provided file),
+# verifies the repo structure, and creates a timestamped tarball.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,13 +24,29 @@ fi
 
 TARBALL_PATH="$DEST/$TARBALL_NAME"
 
-echo "📦 Hermes Repo Backup"
+echo "📦 Hermes Repo Backup v2"
 echo "   Timestamp: $TIMESTAMP"
 echo "   Repo:      $REPO_DIR"
 echo "   Drive:     $DRIVE_STATUS ($DEST)"
 echo ""
 
-# --- Step 1: Verify repo structure ---
+# --- Step 1: Gather paths to back up ---
+PATHS_FILE="${1:-}"
+if [ -z "$PATHS_FILE" ]; then
+    echo "🔍 Running discover-paths.sh to gather paths..."
+    PATHS_FILE=$(mktemp)
+    "$SCRIPT_DIR/discover-paths.sh" > "$PATHS_FILE"
+    CLEANUP_TEMP=true
+else
+    echo "📄 Reading paths from: $PATHS_FILE"
+    CLEANUP_TEMP=false
+fi
+
+PATH_COUNT=$(wc -l < "$PATHS_FILE" | xargs)
+echo "   Found $PATH_COUNT paths to back up"
+echo ""
+
+# --- Step 2: Verify repo structure ---
 echo "🔍 Verifying repo structure..."
 KIT_COUNT=0
 MISSING_KITS=()
@@ -49,55 +66,43 @@ else
     echo "✅ All $KIT_COUNT kits have kit.md files"
 fi
 
-# Check README exists
-if [ -f "$REPO_DIR/README.md" ]; then
-    echo "✅ README.md present"
-else
-    echo "⚠️  README.md missing"
-fi
+[ -f "$REPO_DIR/README.md" ]               && echo "✅ README.md present"
+[ -f "$REPO_DIR/MASTER-RESTORATION.md" ]   && echo "✅ MASTER-RESTORATION.md present"
 
-# Check MASTER-RESTORATION.md exists
-if [ -f "$REPO_DIR/MASTER-RESTORATION.md" ]; then
-    echo "✅ MASTER-RESTORATION.md present"
+# Check for KIT-TABLE markers
+if grep -q '<!-- KIT-TABLE:START -->' "$REPO_DIR/README.md" 2>/dev/null; then
+    echo "✅ README has KIT-TABLE markers (auto-generated table)"
 else
-    echo "⚠️  MASTER-RESTORATION.md missing"
+    echo "⚠️  README missing KIT-TABLE markers — run update-readme-kits.sh"
 fi
 
 echo ""
 
-# --- Step 2: Create tarball ---
+# --- Step 3: Create tarball ---
 echo "🗜️  Creating tarball..."
 
-# Files and dirs to backup
-BACKUP_PATHS=(
-    "$HOME/.hermes/config.yaml"
-    "$HOME/.hermes/SOUL.md"
-    "$HOME/.hermes/auth.json"
-    "$HOME/.hermes/.env"
-    "$HOME/.hermes/memories/"
-    "$HOME/.hermes/skills/"
-    "$HOME/.hermes/kanban.db"
-    "$HOME/.hermes/tailscale-state.json"
-    "$HOME/.hermes/profiles/"
-    "$HOME/.tirith/"
-    "$HOME/.ssh/config"
-    "$HOME/.ssh/id_ed25519"
-    "$HOME/.ssh/id_ed25519.pub"
-    "$HOME/novel-os/"
-    "$REPO_DIR/"
-)
-
-# Filter to existing paths
+# Filter to only existing paths
 EXISTING_PATHS=()
-for p in "${BACKUP_PATHS[@]}"; do
-    # Use eval to handle ~ expansion
+while IFS= read -r p; do
+    # Skip empty lines
+    [ -z "$p" ] && continue
+    # Expand ~ if present
     eval expanded="$p"
     if [ -e "$expanded" ]; then
         EXISTING_PATHS+=("$expanded")
     else
         echo "   (skipping missing: $p)"
     fi
-done
+done < "$PATHS_FILE"
+
+if [ $CLEANUP_TEMP = true ]; then
+    rm -f "$PATHS_FILE"
+fi
+
+if [ ${#EXISTING_PATHS[@]} -eq 0 ]; then
+    echo "❌ No valid paths to back up!"
+    exit 1
+fi
 
 tar czf "$TARBALL_PATH" "${EXISTING_PATHS[@]}" 2>/dev/null
 
@@ -115,10 +120,11 @@ fi
 
 echo ""
 
-# --- Step 3: Report ---
+# --- Step 4: Report ---
 echo "📋 Backup Summary"
 echo "   Destination:  $DEST"
 echo "   Tarball:      $TARBALL_NAME"
+echo "   Paths backed: ${#EXISTING_PATHS[@]}"
 echo "   Kit count:    $KIT_COUNT"
 if [ "$DRIVE_STATUS" = "disconnected" ]; then
     echo ""

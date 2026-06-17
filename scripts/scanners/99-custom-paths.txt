@@ -1,0 +1,4 @@
+# One additional path per line. Add custom files/directories to back up.
+# Lines starting with # are ignored. Empty lines are ignored.
+# Example:
+# ~/.config/some-tool/config.json
