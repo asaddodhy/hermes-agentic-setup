@@ -97,7 +97,7 @@ Kits 7 and 8 can be done independently once 5+6 are in place. Kit 4 is optional 
 | Check mb14 API health | `curl http://192.168.1.200:8642/health` |
 | Restart Tailscale | `pkill tailscaled && /opt/homebrew/opt/tailscale/bin/tailscaled --tun=userspace-networking --state=$HOME/.hermes/tailscale-state.json --socket=$HOME/.hermes/tailscale.sock > /tmp/tailscaled.log 2>&1 &` |
 | Reload MCP tools | `/reload-mcp` (in Hermes session) |
-| Create backup | `./scripts/hermes-backup.sh` or invoke the `hermes-repo-backup` skill |
+| Create quick backup | `/skill backup-lite` or `./scripts/hermes-backup.sh` | |
 
 ---
 
@@ -120,7 +120,23 @@ For full security hardening, run **Kit 9** (`kits/security-hardening/`).
 
 ### Making a backup
 
-Invoke the `hermes-repo-backup` skill in a Hermes session, or run the backup script directly:
+Two skills are available — use the right one for your situation:
+
+**`backup-lite`** (fast, cheap, runs daily/weekly):
+- Uses convention scripts for mechanical work, lightweight agent review for decisions
+- Run with `/skill backup-lite` or `hermes -s backup-lite`
+- Automatically syncs the README kit table from actual kit files
+- Creates a timestamped tarball at network drive or local fallback
+
+**`backup-deep`** (thorough, discovers new conventions to scan, runs monthly):
+- Full agent-driven inventory of your entire Hermes setup
+- Finds components not yet covered by convention scanners
+- Creates new scanner scripts for recurring patterns
+- Updates `99-custom-paths.txt` for one-off items
+- Then runs `backup-lite` to validate
+- Run with `/skill backup-deep` or `hermes -s backup-deep`
+
+**Or run the backup script directly:**
 
 ```bash
 ./scripts/hermes-backup.sh
