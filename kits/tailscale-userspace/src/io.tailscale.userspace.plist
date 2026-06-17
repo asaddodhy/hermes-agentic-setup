@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>Label</key>
+	<string>io.tailscale.userspace</string>
+	<key>LimitLoadToSessionType</key>
+	<array>
+		<string>Aqua</string>
+		<string>Background</string>
+		<string>LoginWindow</string>
+		<string>StandardIO</string>
+	</array>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/homebrew/opt/tailscale/bin/tailscaled</string>
+		<string>--tun=userspace-networking</string>
+		<string>--state=/Users/dodhya/.hermes/tailscale-state.json</string>
+		<string>--socket=/Users/dodhya/.hermes/tailscale.sock</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/tmp/tailscaled.log</string>
+	<key>StandardOutPath</key>
+	<string>/tmp/tailscaled.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+	</dict>
+</dict>
+</plist>

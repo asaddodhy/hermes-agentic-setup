@@ -1,8 +1,8 @@
-# Hermes Multi-Machine Setup
+# Hermes Agentic Setup
 
 > **Created:** June 15, 2026
 > **Author:** Hermes Agent (mb16 — this machine)
-> **Last updated:** June 16, 2026
+> **Last updated:** June 17, 2026
 > **Machines:**
 > - **mb16** — MacBook, user `dodhya`, Tailscale IP `100.120.204.56`
 > - **mb14** — MacBook (N719HT), user `asadpreuss-dodhy`, Tailscale IP `100.97.232.91`, LAN IP `192.168.1.200`
@@ -34,59 +34,45 @@ Two connection methods:
 
 ---
 
-## Prerequisites
+## Kits — Complete Inventory
 
-| Required | Details |
-|----------|---------|
-| macOS | Both machines (other OS supported but not tested) |
-| Homebrew | `brew install tailscale` |
-| Hermes Agent | Installed on both machines |
-| Tailscale account | Free tier works |
+All kits are under `kits/`. Each is a self-contained `kit.md` with YAML frontmatter + step-by-step workflow. Run them in order for a full restoration.
 
----
+| # | Kit | What it does | Dependencies | Backup status |
+|---|-----|-------------|--------------|--------------|
+| 1 | **[Hermes Install](kits/hermes-install/kit.md)** | Install Hermes Agent v0.16.0, Python 3.11, Tirith | — | ✅ Can reinstall from pip |
+| 2 | **[Hermes Profiles](kits/hermes-profiles/kit.md)** | Create all 3 profiles (default, novelist, team-manager) with configs, skills, SOUL.md, AGENTS.md | Kit 1 | ✅ Tarball-able |
+| 3 | **[Model Providers](kits/model-providers/kit.md)** | Set up Copilot (gpt-5-mini) and OpenCode Zen (deepseek-v4-flash-free), auth, .env | Kit 1 | 🔶 Needs re-auth |
+| 4 | **[Novel-OS](kits/novel-os/kit.md)** | Install Novel-OS writing platform, venv, story state, novelist profile integration | Kit 1, 2 | ✅ Tarball-able (350 MB) |
+| 5 | **[Tailscale Userspace](kits/tailscale-userspace/kit.md)** | Tailscale daemon in userspace mode, mesh between mb16 ↔ mb14 | — | 🔶 Needs re-auth |
+| 6 | **[SSH Key Auth](kits/ssh-key-auth/kit.md)** | SSH key pair, deploy to mb14, passwordless login | Kit 5 | ✅ Tarball-able |
+| 7 | **[MCP Remote Bridge](kits/hermes-mcp-bridge/kit.md)** | MCP server `mb14` in team-manager profile, 10 messaging tools | Kits 5, 6 | ✅ Tarball-able |
+| 8 | **[API Server](kits/hermes-api-server/kit.md)** | Remote Hermes API server on mb14, OpenAI-compatible HTTP | Kits 5, 6 | 🔶 Needs re-deploy |
+| 9 | **[Security Hardening](kits/security-hardening/kit.md)** | Tirith custom rules, smart approvals, secure-credentials skill | Kit 1 | ✅ Tarball-able |
 
-## Quick Reference
-
-| Task | Command |
-|------|---------|
-| Check mb14 online | `tailscale --socket ~/.hermes/tailscale.sock status` (look for `-`) |
-| Restart mb14 gateway | `ssh asadpreuss-dodhy@192.168.1.200 'pkill -f "hermes gateway run"; hermes gateway run --accept-hooks &'` |
-| Check mb14 API health | `curl http://192.168.1.200:8642/health` |
-| Test SSH connection | `ssh asadpreuss-dodhy@192.168.1.200 "echo OK"` |
-| Restart Tailscale | `pkill tailscaled && /opt/homebrew/opt/tailscale/bin/tailscaled --tun=userspace-networking --state=/Users/dodhya/.hermes/tailscale-state.json --socket=/Users/dodhya/.hermes/tailscale.sock > /tmp/tailscaled.log 2>&1 &` |
-| Reload MCP tools | `/reload-mcp` (in Hermes session) |
+### What each icon means for restoration:
+- ✅ **Tarball-able** — files can be copied from the backup archive directly
+- 🔶 **Needs re-auth or re-deploy** — requires interactive setup (paste token, run auth flow, etc.)
 
 ---
 
-## Kits — Reusable Workflow Blueprints
+## Restoration Order
 
-The detailed setup is broken into standalone kits under `kits/`. Each kit is a self-contained `kit.md` with structured frontmatter (models, services, parameters) and a step-by-step workflow body. Run them individually or in sequence to reproduce any part of the setup.
-
-| # | Kit | What it installs | Dependencies |
-|---|-----|-----------------|--------------|
-| 1 | **[Tailscale Userspace for Agent Mesh](kits/tailscale-userspace/kit.md)** | Tailscale daemon in userspace mode, `~/.hermes/tailscale.sock`, persistent state | — |
-| 2 | **[SSH Key Auth for Cross-Machine Agents](kits/ssh-key-auth/kit.md)** | SSH key pair, `authorized_keys` on remote, passwordless login test | Kit 1 |
-| 3 | **[Hermes MCP Remote Bridge](kits/hermes-mcp-bridge/kit.md)** | MCP server `mb14` in profile config, 10 messaging tools | Kits 1, 2 |
-| 4 | **[Hermes API Server](kits/hermes-api-server/kit.md)** | `.env` API key, gateway launch, health check, chat completion test | Kits 1, 2 |
-| 5 | **[Security Hardening Suite](kits/security-hardening/kit.md)** | Tirith custom rules policy, smart approvals, secure-credentials skill | — |
-
-Each kit follows the **Journey Kit** format (`kit.md` with YAML frontmatter + markdown body) so you can run them agent-assisted — point your agent at a `kit.md` and it will execute the workflow.
-
----
-
-## Setup Order
-
-For a fresh machine, run kits in this order:
+For a complete restoration on a new machine, run kits in this order:
 
 ```
-1. tailscale-userspace   (foundation: VPN mesh)
-2. ssh-key-auth          (access: passwordless login)
-3. hermes-mcp-bridge     (tools: remote messaging)
-   hermes-api-server     (agent: full remote agent)   ← either or both
-5. security-hardening    (safety: lock it down)
+ 1. hermes-install        (foundation: Hermes + Python)
+ 2. hermes-profiles       (structure: 3 profiles, configs, skills, personalities)
+ 3. model-providers       (access: Copilot auth, API keys)
+ 4. novel-os              (writing: Novel-OS install + integration)
+ 5. tailscale-userspace   (mesh: VPN daemon)
+ 6. ssh-key-auth          (access: passwordless SSH)
+ 7. hermes-mcp-bridge     (tools: remote messaging)  ← requires 5+6
+ 8. hermes-api-server     (agent: full remote API)    ← requires 5+6
+ 9. security-hardening    (safety: lock it down)
 ```
 
-Kits 3 and 4 can be done independently once 1+2 are in place.
+Kits 7 and 8 can be done independently once 5+6 are in place. Kit 4 is optional if you don't need novel writing.
 
 ---
 
@@ -99,25 +85,17 @@ Kits 3 and 4 can be done independently once 1+2 are in place.
 
 ---
 
-## Migrating to Another Machine
+## Quick Reference
 
-```bash
-# 1. Copy the Tirith policy
-mkdir -p ~/.tirith
-cp path/to/backup/.tirith/policy.yaml ~/.tirith/
-
-# 2. Set approvals mode
-hermes config set approvals.mode smart
-
-# 3. Copy the skill
-cp -r path/to/backup/.hermes/skills/software-development/secure-credentials \
-  ~/.hermes/skills/software-development/secure-credentials
-
-# 4. Verify Tirith
-~/.hermes/bin/tirith policy validate
-```
-
-Or better — run the relevant kit from `kits/`.
+| Task | Command |
+|------|---------|
+| Check mb14 online | `tailscale --socket ~/.hermes/tailscale.sock status` (look for `-`) |
+| Test SSH connection | `ssh asadpreuss-dodhy@192.168.1.200 "echo OK"` |
+| Restart mb14 gateway | `ssh asadpreuss-dodhy@192.168.1.200 'pkill -f "hermes gateway run"; hermes gateway run --accept-hooks &'` |
+| Check mb14 API health | `curl http://192.168.1.200:8642/health` |
+| Restart Tailscale | `pkill tailscaled && /opt/homebrew/opt/tailscale/bin/tailscaled --tun=userspace-networking --state=$HOME/.hermes/tailscale-state.json --socket=$HOME/.hermes/tailscale.sock > /tmp/tailscaled.log 2>&1 &` |
+| Reload MCP tools | `/reload-mcp` (in Hermes session) |
+| Create backup | `./scripts/hermes-backup.sh` or invoke the `hermes-repo-backup` skill |
 
 ---
 
@@ -132,4 +110,22 @@ Or better — run the relevant kit from `kits/`.
 - **Command approval** — run gateway with `--accept-hooks` to auto-approve shell hooks, or keep approvals on
 - **Profile isolation** — MCP server config lives in the profile it was added to; add it per-profile
 
-For full security hardening, run **Kit 5** (`kits/security-hardening/`).
+For full security hardening, run **Kit 9** (`kits/security-hardening/`).
+
+---
+
+## Backup & Restore
+
+### Making a backup
+
+Invoke the `hermes-repo-backup` skill in a Hermes session, or run the backup script directly:
+
+```bash
+./scripts/hermes-backup.sh
+```
+
+This creates a tarball at:
+- `/Volumes/Seagate_Backup_Plus_Drive/NAS/Hermes Backup/` (if network drive is connected)
+- `~/Documents/Hermes Backup/` (fallback, with a notification)
+
+For full restoration instructions, see **[MASTER-RESTORATION.md](MASTER-RESTORATION.md)**.
