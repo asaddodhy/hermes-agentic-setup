@@ -44,12 +44,15 @@ All kits are under `kits/`. Each is a self-contained `kit.md` with YAML frontmat
 | 1 | **[hermes-api-server](kits/hermes-api-server/kit.md)** | Deploy a remote Hermes Agent API server exposing an OpenAI-compatible HTTP AP... | | |
 | 2 | **[hermes-install](kits/hermes-install/kit.md)** | Install Hermes Agent from scratch on a new macOS machine — pip, pipx, or Home... | | |
 | 3 | **[hermes-mcp-remote-bridge](kits/hermes-mcp-bridge/kit.md)** | Bridge two Hermes Agent instances over SSH stdio via the MCP protocol — givin... | | |
-| 4 | **[hermes-profiles](kits/hermes-profiles/kit.md)** | Set up all 3 Hermes profiles (default, novelist, team-manager) with their uni... | | |
-| 5 | **[model-providers](kits/model-providers/kit.md)** | Document and restore all Hermes model provider configurations — Copilot (GitH... | | |
-| 6 | **[novel-os](kits/novel-os/kit.md)** | Install, restore, and integrate Novel-OS — a multi-agent fiction writing fram... | | |
-| 7 | **[security-hardening-suite](kits/security-hardening/kit.md)** | Lock down a Hermes Agent with Tirith custom rules, smart approvals mode, and ... | | |
-| 8 | **[ssh-key-auth](kits/ssh-key-auth/kit.md)** | Set up SSH key-based authentication between two machines for cross-machine He... | | |
-| 9 | **[tailscale-userspace](kits/tailscale-userspace/kit.md)** | Set up Tailscale in userspace (no-root) mode for cross-machine Hermes agent m... | | |
+| 4 | **[hermes-networking](kits/hermes-networking/kit.md)** | End-to-end cross-machine Hermes networking — Tailscale userspace VPN mesh, SS... | | |
+| 5 | **[hermes-profiles](kits/hermes-profiles/kit.md)** | Set up all 3 Hermes profiles (default, novelist, team-manager) with their uni... | | |
+| 6 | **[hermes-webui](kits/hermes-webui/kit.md)** | Full setup of the nesquena/hermes-webui frontend — local HTTP, remote HTTP ov... | | |
+| 7 | **[model-providers](kits/model-providers/kit.md)** | Document and restore all Hermes model provider configurations — Copilot (GitH... | | |
+| 8 | **[novel-os](kits/novel-os/kit.md)** | Install, restore, and integrate Novel-OS — a multi-agent fiction writing fram... | | |
+| 9 | **[profile-oauth-setup](kits/profile-oauth-setup/kit.md)** | Full OAuth credential setup for a Hermes profile — Google services (Drive, Gm... | | |
+| 10 | **[security-hardening-suite](kits/security-hardening/kit.md)** | Lock down a Hermes Agent with Tirith custom rules, smart approvals mode, and ... | | |
+| 11 | **[ssh-key-auth](kits/ssh-key-auth/kit.md)** | Set up SSH key-based authentication between two machines for cross-machine He... | | |
+| 12 | **[tailscale-userspace](kits/tailscale-userspace/kit.md)** | Set up Tailscale in userspace (no-root) mode for cross-machine Hermes agent m... | | |
 <!-- KIT-TABLE:END -->
 
 ### What each icon means for restoration:
@@ -63,18 +66,23 @@ All kits are under `kits/`. Each is a self-contained `kit.md` with YAML frontmat
 For a complete restoration on a new machine, run kits in this order:
 
 ```
- 1. hermes-install        (foundation: Hermes + Python)
- 2. hermes-profiles       (structure: 3 profiles, configs, skills, personalities)
- 3. model-providers       (access: Copilot auth, API keys)
- 4. novel-os              (writing: Novel-OS install + integration)
- 5. tailscale-userspace   (mesh: VPN daemon)
- 6. ssh-key-auth          (access: passwordless SSH)
- 7. hermes-mcp-bridge     (tools: remote messaging)  ← requires 5+6
- 8. hermes-api-server     (agent: full remote API)    ← requires 5+6
- 9. security-hardening    (safety: lock it down)
+ 1. hermes-install             (foundation: Hermes + Python)
+ 2. hermes-profiles            (structure: 3 profiles, configs, skills, personalities)
+ 3. model-providers            (access: Copilot auth, API keys)
+ 4. profile-oauth-setup        (auth: Google + Copilot OAuth setup)
+ 5. novel-os                   (writing: Novel-OS install + integration)
+ 6. tailscale-userspace        (mesh: VPN daemon)
+ 7. ssh-key-auth               (access: passwordless SSH)
+ 8. hermes-webui               (UI: Web frontend + HTTPS + remote access)
+ 9. hermes-mcp-bridge          (tools: remote messaging)  ← requires 6+7
+10. hermes-api-server          (agent: full remote API)    ← requires 6+7
+11. hermes-networking          (orchestrator: references kits 6–10)
+12. security-hardening         (safety: lock it down)
 ```
 
-Kits 7 and 8 can be done independently once 5+6 are in place. Kit 4 is optional if you don't need novel writing.
+Kits 4 and 5 are optional — skip if you don't need OAuth or novel writing.
+Kits 9 and 10 can be done independently once 6+7 are in place.
+Kit 11 is a reference umbrella — run after kits 6-10 to verify the full networking stack.
 
 ---
 
