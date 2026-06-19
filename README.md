@@ -46,7 +46,7 @@ All kits are under `kits/`. Each is a self-contained `kit.md` with YAML frontmat
 | 3 | **[hermes-mcp-remote-bridge](kits/hermes-mcp-bridge/kit.md)** | Bridge two Hermes Agent instances over SSH stdio via the MCP protocol — givin... | | |
 | 4 | **[hermes-networking](kits/hermes-networking/kit.md)** | End-to-end cross-machine Hermes networking — Tailscale userspace VPN mesh, SS... | | |
 | 5 | **[hermes-profiles](kits/hermes-profiles/kit.md)** | Set up all 3 Hermes profiles (default, novelist, team-manager) with their uni... | | |
-| 6 | **[hermes-webui](kits/hermes-webui/kit.md)** | Full setup of the nesquena/hermes-webui frontend — local HTTP, remote HTTP ov... | | |
+| 6 | **[hermes-webui](kits/hermes-webui/kit.md)** | Fresh install and launchd daemonization of nesquena/hermes-webui with remote ... | | |
 | 7 | **[model-providers](kits/model-providers/kit.md)** | Document and restore all Hermes model provider configurations — Copilot (GitH... | | |
 | 8 | **[novel-os](kits/novel-os/kit.md)** | Install, restore, and integrate Novel-OS — a multi-agent fiction writing fram... | | |
 | 9 | **[profile-oauth-setup](kits/profile-oauth-setup/kit.md)** | Full OAuth credential setup for a Hermes profile — Google services (Drive, Gm... | | |
@@ -73,7 +73,7 @@ For a complete restoration on a new machine, run kits in this order:
  5. novel-os                   (writing: Novel-OS install + integration)
  6. tailscale-userspace        (mesh: VPN daemon)
  7. ssh-key-auth               (access: passwordless SSH)
- 8. hermes-webui               (UI: Web frontend + HTTPS + remote access)
+ 8. hermes-webui               (UI: Web frontend + Tailscale remote access)
  9. hermes-mcp-bridge          (tools: remote messaging)  ← requires 6+7
 10. hermes-api-server          (agent: full remote API)    ← requires 6+7
 11. hermes-networking          (orchestrator: references kits 6–10)

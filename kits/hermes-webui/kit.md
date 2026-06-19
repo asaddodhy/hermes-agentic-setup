@@ -1,67 +1,62 @@
 ---
 name: hermes-webui
-description: "Full setup of the nesquena/hermes-webui frontend — local HTTP, remote HTTP over Tailscale, HTTPS via Caddy reverse proxy, Groq STT, and launchd daemonization on macOS."
-version: 1.0.0
+description: "Fresh install and launchd daemonization of nesquena/hermes-webui with remote access via Tailscale Serve."
+version: 2.0.0
 author: dodhya
 models:
   primary: any
 services:
   tailscale:
     required: true
-    description: "Userspace Tailscale daemon for remote access via Tailscale IP"
-    setup: "Must be running in userspace-networking mode with socket at ~/.hermes/tailscale.sock and state at ~/.hermes/tailscale-state.json"
+    description: "Tailscale userspace daemon for remote HTTPS access via Tailscale Serve"
+    setup: "See tailscale-userspace kit — must be running with socket at ~/.hermes/tailscale.sock"
   groq:
     required: false
-    description: "Groq API for server-side STT (mic transcription)"
+    description: "Groq API key for server-side STT (mic transcription)"
     setup: "Add GROQ_API_KEY to ~/hermes-webui/.env"
-  caddy:
-    required: false
-    description: "Caddy reverse proxy for HTTPS on port 8443 (required for mobile mic)"
-    setup: "brew install caddy; see Steps below"
 parameters:
   webui.host: 0.0.0.0
   webui.port: 8787
-  caddy.https_port: 8443
-  tailscale.ip: 100.120.204.56
-  tailscale.hostname: mb16.tail1ed44d.ts.net
 environment:
   os: [macos]
   hermes_version: ">=0.1.0"
+dependencies:
+  - tailscale-userspace
+security:
+  secrets_stored:
+    - location: ~/hermes-webui/.env
+      items: [HERMES_WEBUI_PASSWORD, GROQ_API_KEY]
+  trust_boundaries:
+    - Tailscale tailnet (encrypted mesh — only devices you authorize)
+  known_threats:
+    - Binding to 0.0.0.0 without password exposes WebUI to LAN
+    - Tailscale Serve uses HTTPS only — HTTP clients cannot reach through it
+tags: [hermes, webui, tailscale, remote-access]
 src:
   fileManifest:
     - path: src/configs/com.parantoux.hermes-webui.plist
       role: "launchd plist for WebUI daemon"
       destination: ~/Library/LaunchAgents/com.parantoux.hermes-webui.plist
-    - path: src/configs/Caddyfile
-      role: "Caddy reverse proxy config for HTTPS"
-      destination: ~/.hermes/caddy/Caddyfile
-    - path: src/configs/com.hermes.caddy.plist
-      role: "launchd plist for Caddy daemon"
-      destination: ~/Library/LaunchAgents/com.hermes.caddy.plist
 ---
 
-# Hermes WebUI — Full Setup Kit
+# Hermes WebUI — Install & Remote Access Kit
 
 ## Goal
 
-Install and fully configure [nesquena/hermes-webui](https://github.com/nesquena/hermes-webui) — a rich web frontend for Hermes Agent — with:
+Install [nesquena/hermes-webui](https://github.com/nesquena/hermes-webui) and make it accessible both locally and remotely:
 
-- **Local HTTP** at `http://localhost:8787` (desktop browser)
-- **Remote HTTP** at `http://100.120.204.56:8787` over Tailscale
-- **Remote HTTPS** at `https://100.120.204.56:8443` via Caddy (required for mobile mic/STT)
-- **Groq STT** for server-side speech transcription
-- **launchd daemonization** for both WebUI and Caddy (survive sleep, auto-restart)
-
-Both HTTP and HTTPS run simultaneously — same WebUI backend, two entry points.
+- **Local** — `http://localhost:8787` (desktop browser on this machine)
+- **Remote** — `https://<your-tailscale-hostname>.ts.net` (any device on your tailnet)
+- **launchd daemon** — survives sleep, auto-restarts on crash, starts on login
 
 ---
 
 ## When to Use
 
-- Fresh machine setup: need the Hermes WebUI installed from scratch
+- Fresh machine setup — need the Hermes WebUI from nothing
 - Restoring after a system wipe or new Mac
-- Adding HTTPS/mobile mic support to an existing HTTP-only WebUI setup
-- After Tailscale is re-configured and remote access is broken
+- After a failed WebUI update or corrupted install
+- You have Tailscale running (or will set it up) and want remote browser access
 
 ---
 
@@ -74,20 +69,19 @@ Both HTTP and HTTPS run simultaneously — same WebUI backend, two entry points.
 | Hermes Agent installed and running | `hermes status` |
 | Tailscale userspace daemon running | `tailscale --socket ~/.hermes/tailscale.sock status` |
 | Homebrew installed | `brew --version` |
-| Groq API key (for STT only) | Optional — skip STT section if not needed |
-| Self-signed TLS cert at `~/.hermes/tls/` | See Step 5 if missing |
+| Groq API key (for STT only) | Optional — skip if not needed |
 
-### What this kit installs
+### What this kit sets up
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | hermes-webui repo | `~/hermes-webui/` | WebUI source + bootstrap |
-| WebUI launchd plist | `~/Library/LaunchAgents/com.parantoux.hermes-webui.plist` | Daemonize WebUI |
-| Caddy | `/opt/homebrew/bin/caddy` | HTTPS reverse proxy |
-| Caddyfile | `~/.hermes/caddy/Caddyfile` | Caddy config |
-| Caddy launchd plist | `~/Library/LaunchAgents/com.hermes.caddy.plist` | Daemonize Caddy |
-| TLS cert | `~/.hermes/tls/hermes-webui-cert.pem` | Self-signed cert for HTTPS |
-| TLS key | `~/.hermes/tls/hermes-webui-key.pem` | Private key for TLS cert |
+| WebUI launchd plist | `~/Library/LaunchAgents/com.parantoux.hermes-webui.plist` | Daemonize WebUI with auto-restart |
+| `.env` | `~/hermes-webui/.env` | Password + optional Groq STT key |
+
+### Dependencies from other kits
+
+This kit references `tailscale-userspace` for the Tailscale daemon setup. If Tailscale isn't running yet, run that kit first.
 
 ---
 
@@ -96,246 +90,158 @@ Both HTTP and HTTPS run simultaneously — same WebUI backend, two entry points.
 ### Step 1 — Clone and bootstrap the WebUI
 
 ```bash
-git clone https://github.com/nesquena/hermes-webui ~/hermes-webui
+git clone https://github.com/nesquena/hermes-webui.git ~/hermes-webui
 cd ~/hermes-webui
 python3 bootstrap.py --no-browser
 ```
 
-Bootstrap.py creates a venv, resolves the Hermes Agent path, and starts the server. Stop it with Ctrl+C — we'll use launchd instead.
+`bootstrap.py` detects the Hermes Agent venv, installs dependencies, and starts the server. Stop it with **Ctrl+C** — we'll use launchd for persistence.
 
-### Step 2 — Configure .env
+### Step 2 — Configure `.env`
 
-Write `~/hermes-webui/.env` using write_file (NEVER echo >> — see Failures Overcome #4):
+Write `~/hermes-webui/.env` using `write_file` (never use shell `echo >>` — it silently loses content in approval flows):
 
 ```dotenv
 HERMES_WEBUI_PASSWORD=your-strong-password-here
-GROQ_API_KEY=your-groq-api-key-here
+GROQ_API_KEY=your-groq-api-key-here     # optional, for mic transcription
 ```
 
-**Important:** Always use `write_file` with the COMPLETE file content. Never append with shell redirection — it silently loses content in approval flows.
-
-Verify it was written:
+Verify:
 ```bash
-grep -c "=" ~/hermes-webui/.env  # should return 2
+grep -c "=" ~/hermes-webui/.env
+# → 1 or 2 (1 if no Groq, 2 with Groq)
 ```
 
-### Step 3 — Configure Hermes STT (Groq)
+### Step 3 — Install launchd plist for WebUI
 
-```bash
-hermes config set stt.enabled true
-hermes config set stt.provider groq
-```
-
-The frontend's `_probeServerSttCapability()` auto-detects server STT and prefers it over the browser Web Speech API.
-
-### Step 4 — Install launchd plist for WebUI
-
-Copy `src/configs/com.parantoux.hermes-webui.plist` to `~/Library/LaunchAgents/`:
-
-Key settings in the plist:
-- `--host 0.0.0.0` — binds to all interfaces (required for Tailscale IP access)
-- `KeepAlive` with `SuccessfulExit = false` — auto-restart on crash
-- `StartOnMount` — re-launch after wake from sleep
-- `ThrottleInterval 10` — prevents restart loops
+Copy the plist from the kit sources to `~/Library/LaunchAgents/`:
 
 ```bash
 cp kits/hermes-webui/src/configs/com.parantoux.hermes-webui.plist \
    ~/Library/LaunchAgents/
+```
 
-# Load and start
+**Key plist settings:**
+| Setting | Value | Why |
+|---------|-------|-----|
+| `--host 0.0.0.0` | All interfaces | Required for Tailscale IP access |
+| `KeepAlive` | `<true/>` | Auto-restart on crash |
+| `RunAtLoad` | `<true/>` | Start on login |
+
+Load and start:
+
+```bash
+# Unload if a previous version exists
+launchctl bootout gui/$(id -u)/com.parantoux.hermes-webui 2>/dev/null; true
+
+# Load the new plist
 launchctl bootstrap gui/$(id -u) \
   ~/Library/LaunchAgents/com.parantoux.hermes-webui.plist
 
 # Verify
 sleep 3
 launchctl print gui/$(id -u)/com.parantoux.hermes-webui | grep -E 'state|pid'
-curl -s http://localhost:8787/health | head -2
 ```
 
-Expected: `state = running`, health returns `{"status": "ok", ...}`
+Expected output: `state = running`, with a `pid` value.
 
-### Step 5 — Generate self-signed TLS cert
+### Step 4 — Enable Tailscale Serve for HTTPS
+
+Tailscale Serve creates an HTTPS endpoint on port 443 that proxies to your local WebUI. This gives you a `https://<hostname>.ts.net` URL with automatic TLS certs — no manual cert management needed.
 
 ```bash
-mkdir -p ~/.hermes/tls
-
-openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
-  -keyout ~/.hermes/tls/hermes-webui-key.pem \
-  -out ~/.hermes/tls/hermes-webui-cert.pem \
-  -subj "/CN=HermesWebUI" \
-  -addext "subjectAltName=IP:100.120.204.56"
-
-chmod 600 ~/.hermes/tls/hermes-webui-key.pem
-```
-
-**Important:** The SAN must be `IP:100.120.204.56` (your Tailscale IP) — Chrome requires IP SANs for self-signed certs served by IP address. Replace with your actual Tailscale IP if different.
-
-Verify:
-```bash
-openssl x509 -in ~/.hermes/tls/hermes-webui-cert.pem -noout -text \
-  | grep -A1 "Subject Alternative"
-# → IP Address:100.120.204.56
-```
-
-### Step 6 — Install Caddy
-
-```bash
-brew install caddy
-caddy version  # confirm installed
-```
-
-### Step 7 — Write Caddyfile
-
-Copy `src/configs/Caddyfile` to `~/.hermes/caddy/Caddyfile`, or write directly:
-
-```
-mkdir -p ~/.hermes/caddy
-```
-
-Content of `~/.hermes/caddy/Caddyfile`:
-```
-https://100.120.204.56:8443 {
-    tls /Users/dodhya/.hermes/tls/hermes-webui-cert.pem /Users/dodhya/.hermes/tls/hermes-webui-key.pem
-    reverse_proxy localhost:8787
-}
-```
-
-**Critical:** Use explicit cert files (`tls <cert> <key>`), NOT `tls internal`. Caddy's internal CA fails on macOS with `tlsv1 alert internal error (SSL alert number 80)` due to LibreSSL incompatibility.
-
-Validate:
-```bash
-caddy validate --config ~/.hermes/caddy/Caddyfile 2>&1 | grep -E "Valid|error"
-# → Valid configuration
-```
-
-### Step 8 — Install launchd plist for Caddy
-
-Copy `src/configs/com.hermes.caddy.plist` to `~/Library/LaunchAgents/`:
-
-```bash
-cp kits/hermes-webui/src/configs/com.hermes.caddy.plist \
-   ~/Library/LaunchAgents/
-
-# Load and start
-launchctl bootstrap gui/$(id -u) \
-  ~/Library/LaunchAgents/com.hermes.caddy.plist
+# Enable Tailscale Serve — proxies https://<hostname>.ts.net → http://localhost:8787
+tailscale --socket="$HOME/.hermes/tailscale.sock" serve --bg \
+  --https=443 / http://localhost:8787
 
 # Verify
-sleep 3
-launchctl print gui/$(id -u)/com.hermes.caddy | grep -E 'state|pid'
-lsof -i :8443 -P -n | grep LISTEN
-curl -sk https://localhost:8443/health | head -2
-```
-
-Expected: Caddy listening on `*:8443`, HTTPS health returns `{"status": "ok", ...}`
-
-### Step 9 — Verify Tailscale daemon is running
-
-```bash
-tailscale --socket="$HOME/.hermes/tailscale.sock" status
-# → Should show your devices and IP 100.120.204.56
-```
-
-If it shows "failed to connect" or "Logged out", restart it:
-```bash
-/opt/homebrew/opt/tailscale/bin/tailscaled \
-  -tun=userspace-networking \
-  -socket="$HOME/.hermes/tailscale.sock" \
-  -state="$HOME/.hermes/tailscale-state.json" &
-```
-
-See `tailscale-userspace` kit for full daemon setup and persistence.
-
-**Check for Tailscale Serve port conflicts** — critical for HTTP access:
-```bash
 tailscale --socket="$HOME/.hermes/tailscale.sock" serve status
 ```
-If any rule appears on port 8787 (e.g. `https://...:8787 → proxy http://localhost:8787`), remove it:
+
+Expected output:
+```
+https://<your-hostname>.ts.net (tailnet only)
+|-- / proxy http://localhost:8787
+```
+
+**Important:** If you already have a Tailscale Serve rule on port 8787 from an older setup, remove it — it intercepts HTTP traffic with a TLS handshake and breaks plain HTTP access:
 ```bash
 tailscale --socket="$HOME/.hermes/tailscale.sock" serve --https=8787 off
 ```
-Tailscale Serve **only supports HTTPS** — it cannot proxy plain HTTP. Any Serve rule on port 8787 intercepts all WireGuard traffic on that port and presents a TLS handshake, causing HTTP clients to fail with `HTTP 000`.
 
-### Step 10 — Test all access points
+### Step 5 — Verify the WebUI
 
 ```bash
-# Local HTTP (desktop browser)
-curl -s http://localhost:8787/health | head -2
+# Local HTTP
+curl -s http://localhost:8787/health
 
-# HTTPS via Caddy (mobile mic)
-curl -sk https://localhost:8443/health | head -2
+# Binding check — should show *:8787 (all interfaces)
+lsof -i :8787 -P -n | grep LISTEN
 
-# Binding check
-lsof -i :8787 -P -n | grep LISTEN  # should show *:8787
-lsof -i :8443 -P -n | grep LISTEN  # should show *:8443
+# Check the log for any errors
+tail -5 ~/.hermes/webui.log
 ```
 
-From your phone (Tailscale connected):
-- `http://100.120.204.56:8787` — HTTP (no mic on Android Chrome)
-- `https://100.120.204.56:8443` — HTTPS (mic works; accept self-signed cert warning once)
-- `https://mb16.tail1ed44d.ts.net` — HTTPS via Tailscale Serve (mic works; automatic TLS cert, no browser warning)
+Expected health response: `{"status": "ok", "sessions": 0, ...}`
+
+### Step 6 — Test from another device
+
+On any device logged into your Tailscale tailnet, open in a browser:
+
+```
+https://<your-tailscale-hostname>.ts.net
+```
+
+Where `<your-tailscale-hostname>` is the MagicDNS name shown by `tailscale status`. For example, if your machine shows as `mb16`, the URL is `https://mb16.tail1ed44d.ts.net`.
+
+Log in with the `HERMES_WEBUI_PASSWORD` you set in Step 2.
 
 ---
 
 ## Constraints
 
-- **Tailscale userspace mode** — the Mac itself cannot route to `100.120.204.56` locally (no real `utun` interface). Testing the Tailscale IP from the Mac via curl will always fail with exit 28. Only test from another device on the tailnet.
-- **Self-signed cert browser warning** — Chrome shows "Your connection is not private" on first HTTPS visit. Tap Advanced → Proceed. This is expected and safe — traffic is already encrypted inside the Tailscale WireGuard tunnel.
-- **Mic requires HTTPS** — Android Chrome blocks `getUserMedia()` on HTTP origins, even over Tailscale's encrypted tunnel. Must use `https://100.120.204.56:8443`.
-- **Tailscale Serve in userspace mode** — `tailscale serve --https` may not work reliably in userspace-networking mode on macOS; the `*.ts.net` MagicDNS hostname doesn't register in the macOS system resolver. The Caddy approach avoids this entirely.
-- **Admin password for firewall** — If macOS Application Firewall is enabled, the agent cannot modify it (requires `sudo`). In userspace-networking mode this is typically not required since tailscaled proxies connections locally, but if access fails this may be a factor.
+- **Tailscale userspace mode** — the Mac itself cannot route to its own Tailscale IP. Testing `curl http://100.x.x.x:8787` from this machine will time out. Always test from another tailnet device.
+- **Tailscale Serve only supports HTTPS** — it cannot proxy plain HTTP. Clients connecting via `http://<hostname>.ts.net` will see a TLS handshake error. Use `https://`.
+- **HTTP still works via LAN IP** — if you need plain HTTP from another device on the same LAN, use `http://<lan-ip>:8787` (e.g. `http://192.168.1.193:8787`).
+- **Password is required on `0.0.0.0`** — never bind to all interfaces without `HERMES_WEBUI_PASSWORD` set. Without it, any device on your network can access the WebUI without authentication.
+- **launchd `bootout` + `bootstrap` required after plist changes** — `kickstart -k` ignores plist changes. Always do a full unload/reload when editing the plist.
 
 ---
 
 ## Safety Notes
 
-- **Never bind WebUI to `0.0.0.0` without a password set in `.env`** — without `HERMES_WEBUI_PASSWORD`, any device on your network can access the WebUI without authentication.
-- **Self-signed cert is for tailnet only** — the Caddy HTTPS endpoint is not publicly accessible (Tailscale IP only). Do not expose port 8443 to the public internet.
-- **Tailscale state file** — `~/.hermes/tailscale-state.json` contains your Tailscale auth. Back it up (via backup-lite scanner). If lost, you must re-authenticate with `tailscale login`.
-- **launchd plist changes** — after editing a plist's `ProgramArguments`, always do a full `bootout` + `bootstrap`. `kickstart -k` re-runs cached arguments and silently ignores plist changes.
+- **WebUI password** — configure `HERMES_WEBUI_PASSWORD` before binding to `0.0.0.0`. This is your only auth barrier for remote access.
+- **Tailscale state file** — `~/.hermes/tailscale-state.json` contains your Tailscale auth token. Back it up. If lost, you must re-authenticate.
+- **Tailscale tailnet access** — only devices you authorize via the Tailscale admin console can reach your `*.ts.net` URLs. No public exposure.
+- **Groq API key** — stored in plaintext in `.env`. Limit its scope in the Groq dashboard if concerned.
+- **Logs contain no secrets** — `~/.hermes/webui.log` logs request paths and status codes but does not log headers, cookies, or request bodies.
 
 ---
 
 ## Failures Overcome
 
-1. **`tailscale cert` fails in userspace mode** — `tailscale cert` requires `TailscaleVarRoot` which is not exposed in userspace-networking. Use self-signed cert + Caddy instead. Error: `500 Internal Server Error: no TailscaleVarRoot`.
+1. **`kickstart -k` ignores plist changes** — After editing the launchd plist, `launchctl kickstart -k` re-runs the process with launchd's cached arguments; it does NOT re-read the plist. Always use `bootout` then `bootstrap`.
 
-2. **`tls internal` fails on macOS LibreSSL** — Caddy's built-in CA produces a cert that macOS LibreSSL rejects during the TLS handshake. Error: `tlsv1 alert internal error (SSL alert number 80)`. Fix: always provide explicit cert files with `tls <cert.pem> <key.pem>`.
+2. **Tailscale Serve rule on port 8787 breaks HTTP** — A previous `tailscale serve --https=8787` rule intercepts all WireGuard traffic on port 8787 and presents a TLS handshake. HTTP clients get `HTTP 000`. Fix: `serve --https=8787 off`. Verify with `serve status`.
 
-3. **Binding `127.0.0.1` blocks all remote access** — The default launchd plist binds to `127.0.0.1`. Even with Tailscale running, the Tailscale IP `100.120.204.56` cannot reach a localhost-only socket. Fix: change plist `ProgramArguments` to `0.0.0.0`, then `bootout` + `bootstrap` (not `kickstart`).
+3. **`echo >>` silently destroys `.env`** — Using shell redirection (`echo "KEY=val" >> .env`) inside the agent's terminal approval flow can lose existing content or write nothing. Always use `write_file` with the COMPLETE file content.
 
-4. **`echo >>` silently destroys `.env`** — Using shell redirection (`echo "KEY=val" >> .env`) inside the agent's terminal approval flow can lose existing content or write nothing. Always use `write_file` with the COMPLETE file content and verify afterwards with `grep` or `xxd`.
+4. **Tailscale IP unreachable from the Mac itself** — In userspace-networking mode there is no real `utun` interface. The Mac cannot route to `100.x.x.x`. All curl tests from this machine to the Tailscale IP will time out. This is expected — test from a phone or another tailnet device.
 
-5. **`kickstart -k` ignores plist changes** — After changing `ProgramArguments` in the plist (e.g. host binding), `launchctl kickstart -k` re-runs the process with launchd's cached arguments — it does NOT re-read the plist. Must use `bootout` then `bootstrap`.
-
-6. **Tailscale IP unreachable from Mac itself** — In userspace-networking mode, there is no real `utun` interface. The Mac cannot route to its own Tailscale IP (`100.120.204.56`). All `curl` tests from the Mac to this IP will time out with exit 28. This is expected — test from a phone or another tailnet device only.
-
-7. **Tailscale daemon down = IP disappears** — `100.120.204.56` is a virtual Tailscale IP. If tailscaled stops (e.g. Mac sleep, crash), the IP ceases to exist and all remote connections fail immediately. Always check `tailscale status` before blaming the WebUI.
-
-8. **`brew services start tailscale` runs without root** — The Homebrew launchd service for tailscaled fails silently because tailscaled requires root (or `--tun=userspace-networking`). It shows `Loaded: true, Running: false`. Fix: run tailscaled manually with `-tun=userspace-networking` flag instead.
-
-9. **Wrong flags for tailscaled** — tailscaled uses single-dash flags (`-socket`, `-state`, `-tun`), not double-dash. Using `--socket` or `--state` causes it to print help and exit immediately.
-
-10. **Tailscale Serve HTTPS rule intercepts HTTP on port 8787** — If a `--https=8787` Serve rule was set (e.g. from earlier testing), it captures all tailnet traffic on port 8787 and presents a TLS handshake. HTTP clients get `HTTP 000` (timeout/connect failure). Fix: `tailscale --socket ~/.hermes/tailscale.sock serve --https=8787 off`. Verify with `tailscale serve status` — the port 8787 entry must be absent before HTTP access works.
+5. **Python venv path differs between systems** — The launchd plist hardcodes `/Users/dodhya/.hermes/hermes-agent/venv/bin/python`. On a fresh machine, bootstrap.py auto-detects or creates the venv. Update the plist path if the venv location differs.
 
 ---
 
-## Validation
+## Verification
 
 ```
 [ ] WebUI running: curl -s http://localhost:8787/health returns {"status": "ok"}
-[ ] WebUI binding all interfaces: lsof -i :8787 -P -n | grep "TCP \*:8787"
+[ ] Binding all interfaces: lsof -i :8787 -P -n | grep "TCP \*:8787"
 [ ] launchd managing WebUI: launchctl print gui/$(id -u)/com.parantoux.hermes-webui | grep "state = running"
-[ ] Caddy running: lsof -i :8443 -P -n | grep LISTEN
-[ ] HTTPS via Caddy: curl -sk https://localhost:8443/health returns {"status": "ok"}
-[ ] launchd managing Caddy: launchctl print gui/$(id -u)/com.hermes.caddy | grep "state = running"
-[ ] TLS cert has correct SAN: openssl x509 -in ~/.hermes/tls/hermes-webui-cert.pem -noout -text | grep "IP Address:100.120.204.56"
 [ ] Tailscale running: tailscale --socket ~/.hermes/tailscale.sock status shows your IP
+[ ] Tailscale Serve active: tailscale --socket ~/.hermes/tailscale.sock serve status shows / → http://localhost:8787
 [ ] .env has password: grep HERMES_WEBUI_PASSWORD ~/hermes-webui/.env
-[ ] .env has Groq key: grep GROQ_API_KEY ~/hermes-webui/.env
-[ ] Remote HTTP reachable from phone: http://100.120.204.56:8787 loads login page
-[ ] Remote HTTPS reachable from phone: https://100.120.204.56:8443 loads (after cert warning)
-[ ] Mic works on phone: tap mic button in HTTPS WebUI, grant permission, speaks
-[ ] Tailscale Serve has no rule on port 8787: tailscale --socket ~/.hermes/tailscale.sock serve status (must not show :8787)
-[ ] WebUI sessions visible: all recent CLI/TUI sessions appear in WebUI sidebar (if not, run webui-session-discovery skill)
+[ ] No Tailscale Serve rule on port 8787: tailscale --socket ~/.hermes/tailscale.sock serve status (must not show :8787)
+[ ] Remote reachable from phone: https://<your-hostname>.ts.net loads login page
+[ ] Mic works on phone: tap mic button, grants permission, transcribes
 ```
