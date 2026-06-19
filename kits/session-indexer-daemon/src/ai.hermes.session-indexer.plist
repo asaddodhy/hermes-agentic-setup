@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.hermes.session-indexer</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/__YOUR_USERNAME__/.hermes/hermes-agent/venv/bin/python</string>
+        <string>/Users/__YOUR_USERNAME__/.hermes/bin/session_indexer_daemon.py</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/__YOUR_USERNAME__/.hermes/session-indexer.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/__YOUR_USERNAME__/.hermes/session-indexer.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DAEMON_POLL_INTERVAL</key>
+        <string>15</string>
+        <key>HERMES_WEBUI_URL</key>
+        <string>http://127.0.0.1:8787</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

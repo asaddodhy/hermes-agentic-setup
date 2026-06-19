@@ -51,8 +51,9 @@ All kits are under `kits/`. Each is a self-contained `kit.md` with YAML frontmat
 | 8 | **[novel-os](kits/novel-os/kit.md)** | Install, restore, and integrate Novel-OS — a multi-agent fiction writing fram... | | |
 | 9 | **[profile-oauth-setup](kits/profile-oauth-setup/kit.md)** | Full OAuth credential setup for a Hermes profile — Google services (Drive, Gm... | | |
 | 10 | **[security-hardening-suite](kits/security-hardening/kit.md)** | Lock down a Hermes Agent with Tirith custom rules, smart approvals mode, and ... | | |
-| 11 | **[ssh-key-auth](kits/ssh-key-auth/kit.md)** | Set up SSH key-based authentication between two machines for cross-machine He... | | |
-| 12 | **[tailscale-userspace](kits/tailscale-userspace/kit.md)** | Set up Tailscale in userspace (no-root) mode for cross-machine Hermes agent m... | | |
+| 11 | **[session-indexer-daemon](kits/session-indexer-daemon/kit.md)** | Bridges Hermes CLI/TUI sessions from state.db into the WebUI session index — ... | | |
+| 12 | **[ssh-key-auth](kits/ssh-key-auth/kit.md)** | Set up SSH key-based authentication between two machines for cross-machine He... | | |
+| 13 | **[tailscale-userspace](kits/tailscale-userspace/kit.md)** | Set up Tailscale in userspace (no-root) mode for cross-machine Hermes agent m... | | |
 <!-- KIT-TABLE:END -->
 
 ### What each icon means for restoration:
@@ -74,15 +75,17 @@ For a complete restoration on a new machine, run kits in this order:
  6. tailscale-userspace        (mesh: VPN daemon)
  7. ssh-key-auth               (access: passwordless SSH)
  8. hermes-webui               (UI: Web frontend + Tailscale remote access)
- 9. hermes-mcp-bridge          (tools: remote messaging)  ← requires 6+7
-10. hermes-api-server          (agent: full remote API)    ← requires 6+7
-11. hermes-networking          (orchestrator: references kits 6–10)
-12. security-hardening         (safety: lock it down)
+ 9. session-indexer-daemon     (sync: bridges CLI sessions to WebUI)  ← requires 8
+10. hermes-mcp-bridge          (tools: remote messaging)  ← requires 6+7
+11. hermes-api-server          (agent: full remote API)    ← requires 6+7
+12. hermes-networking          (orchestrator: references kits 6–11)
+13. security-hardening         (safety: lock it down)
 ```
 
 Kits 4 and 5 are optional — skip if you don't need OAuth or novel writing.
-Kits 9 and 10 can be done independently once 6+7 are in place.
-Kit 11 is a reference umbrella — run after kits 6-10 to verify the full networking stack.
+Kit 9 requires the WebUI (kit 8) — run after hermes-webui is live.
+Kits 10 and 11 can be done independently once 6+7 are in place.
+Kit 12 is a reference umbrella — run after kits 6-11 to verify the full networking stack.
 
 ---
 
