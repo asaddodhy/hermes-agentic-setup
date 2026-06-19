@@ -1,0 +1,13 @@
+# Hermes WebUI — HTTPS reverse proxy via Caddy
+# Listens on :8443, proxies to WebUI on :8787
+#
+# IMPORTANT: Use explicit cert files (NOT 'tls internal').
+# Caddy's internal CA fails on macOS LibreSSL with:
+#   tlsv1 alert internal error (SSL alert number 80)
+# Replace the IP and cert paths if your Tailscale IP differs.
+
+https://100.120.204.56:8443 {
+    tls /Users/dodhya/.hermes/tls/hermes-webui-cert.pem /Users/dodhya/.hermes/tls/hermes-webui-key.pem
+
+    reverse_proxy localhost:8787
+}

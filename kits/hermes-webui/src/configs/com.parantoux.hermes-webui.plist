@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.parantoux.hermes-webui</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/dodhya/.hermes/hermes-agent/venv/bin/python3.11</string>
+        <string>/Users/dodhya/hermes-webui/bootstrap.py</string>
+        <string>--foreground</string>
+        <string>--no-browser</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>8787</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/dodhya/hermes-webui</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/dodhya</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StartOnMount</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/dodhya/.hermes/webui.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/dodhya/.hermes/webui.log</string>
+</dict>
+</plist>
