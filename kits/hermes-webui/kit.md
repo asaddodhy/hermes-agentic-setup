@@ -246,6 +246,16 @@ If it shows "failed to connect" or "Logged out", restart it:
 
 See `tailscale-userspace` kit for full daemon setup and persistence.
 
+**Check for Tailscale Serve port conflicts** — critical for HTTP access:
+```bash
+tailscale --socket="$HOME/.hermes/tailscale.sock" serve status
+```
+If any rule appears on port 8787 (e.g. `https://...:8787 → proxy http://localhost:8787`), remove it:
+```bash
+tailscale --socket="$HOME/.hermes/tailscale.sock" serve --https=8787 off
+```
+Tailscale Serve **only supports HTTPS** — it cannot proxy plain HTTP. Any Serve rule on port 8787 intercepts all WireGuard traffic on that port and presents a TLS handshake, causing HTTP clients to fail with `HTTP 000`.
+
 ### Step 10 — Test all access points
 
 ```bash
@@ -263,6 +273,7 @@ lsof -i :8443 -P -n | grep LISTEN  # should show *:8443
 From your phone (Tailscale connected):
 - `http://100.120.204.56:8787` — HTTP (no mic on Android Chrome)
 - `https://100.120.204.56:8443` — HTTPS (mic works; accept self-signed cert warning once)
+- `https://mb16.tail1ed44d.ts.net` — HTTPS via Tailscale Serve (mic works; automatic TLS cert, no browser warning)
 
 ---
 
@@ -305,6 +316,8 @@ From your phone (Tailscale connected):
 
 9. **Wrong flags for tailscaled** — tailscaled uses single-dash flags (`-socket`, `-state`, `-tun`), not double-dash. Using `--socket` or `--state` causes it to print help and exit immediately.
 
+10. **Tailscale Serve HTTPS rule intercepts HTTP on port 8787** — If a `--https=8787` Serve rule was set (e.g. from earlier testing), it captures all tailnet traffic on port 8787 and presents a TLS handshake. HTTP clients get `HTTP 000` (timeout/connect failure). Fix: `tailscale --socket ~/.hermes/tailscale.sock serve --https=8787 off`. Verify with `tailscale serve status` — the port 8787 entry must be absent before HTTP access works.
+
 ---
 
 ## Validation
@@ -323,4 +336,6 @@ From your phone (Tailscale connected):
 [ ] Remote HTTP reachable from phone: http://100.120.204.56:8787 loads login page
 [ ] Remote HTTPS reachable from phone: https://100.120.204.56:8443 loads (after cert warning)
 [ ] Mic works on phone: tap mic button in HTTPS WebUI, grant permission, speaks
+[ ] Tailscale Serve has no rule on port 8787: tailscale --socket ~/.hermes/tailscale.sock serve status (must not show :8787)
+[ ] WebUI sessions visible: all recent CLI/TUI sessions appear in WebUI sidebar (if not, run webui-session-discovery skill)
 ```
