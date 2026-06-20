@@ -13,9 +13,14 @@ Designed after: ~/.hermes/skills/hermes-webui/webui-session-discovery/
 
 Behaviour:
   - Polls every 15 seconds (configurable via DAEMON_POLL_INTERVAL env)
-  - Uses cheap fingerprints (row_count + MAX(started_at)) to avoid I/O
-  - Writes new chain-tip sessions to _index.json + sidecar files
-  - Sets pre_compression_snapshot=true on chain parents
+  - Uses cheap fingerprints (row_count + MAX(started_at) + SUM(message_count))
+    to skip full processing when nothing has changed in a profile
+  - Per-session change detection: only rewrites a sidecar when the session's
+    message count changes (or the sidecar is missing)
+  - Sidecar content: full stitched message history across the ancestor chain
+    (root → ... → tip), so WebUI's "see older messages" scroll-back works
+  - After each rebuild, deletes orphaned sidecar files whose session is no
+    longer a chain tip (handles archived, deleted, or superseded sessions)
   - Supports all profiles (auto-discovers at startup)
   - Optionally nudges the WebUI HTTP server to warm its session cache
   - Atomic file writes (tmp + os.replace) to avoid corruption
@@ -49,7 +54,9 @@ POLL_INTERVAL = int(os.environ.get("DAEMON_POLL_INTERVAL", "15"))
 WEBUI_URL = os.environ.get("HERMES_WEBUI_URL", "http://127.0.0.1:8787")
 HEALTH_CHECK_TIMEOUT = 5  # seconds for HTTP health check
 
-CLI_SOURCES = {"tui", "cli"}  # sources we care about
+# Sources whose child sessions mark a parent as "no longer a chain tip".
+# subagent children are excluded — they must NOT suppress their parent.
+CONTINUATION_SOURCES = {"tui", "cli", "webui", "telegram"}
 
 # ── Logging ─────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -106,18 +113,21 @@ def discover_profiles() -> dict[str, Path]:
 def compute_fingerprint(db_path: Path) -> str | None:
     """Compute a cheap fingerprint for change detection.
 
+    Includes COUNT, MAX(started_at), and SUM(message_count) so that
+    both structural changes (new sessions, compressions) and message
+    additions to existing tips are detected.
+
     Returns None if the DB can't be read (e.g. locked, missing).
-    Uses row_count + MAX(started_at) for sessions matching the chain-tip filter.
     """
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.execute("PRAGMA query_only = 1")
         cur = conn.execute("""
-            SELECT COUNT(*), COALESCE(MAX(started_at), 0)
+            SELECT COUNT(*), COALESCE(MAX(started_at), 0), COALESCE(SUM(message_count), 0)
             FROM sessions
             WHERE message_count > 0
               AND title IS NOT NULL
-              AND (source IN ('tui', 'cli') OR source IS NULL)
+              AND source IN ('tui', 'cli')
               AND (archived IS NULL OR archived = 0)
               AND id NOT IN (
                   SELECT DISTINCT parent_session_id FROM sessions
@@ -127,19 +137,21 @@ def compute_fingerprint(db_path: Path) -> str | None:
         """)
         row = cur.fetchone()
         conn.close()
-        raw = f"{row[0]}:{row[1]}"
+        raw = f"{row[0]}:{row[1]}:{row[2]}"
         return hashlib.md5(raw.encode()).hexdigest()
     except Exception as e:
         log.debug(f"Fingerprint failed for {db_path}: {e}")
         return None
 
 
-# ── State.db query ──────────────────────────────────────────────────────────────
+# ── State.db queries ─────────────────────────────────────────────────────────────
 def read_chain_tips(db_path: Path, profile_name: str) -> list[dict]:
     """Read all chain-tip sessions from a state.db.
 
-    Chain tips = sessions not referenced as a parent by any other session.
-    This mirrors exactly what the Hermes desktop app shows.
+    Chain tips = TUI/CLI sessions not referenced as a parent by any
+    continuation session. This mirrors exactly what the Hermes desktop app shows.
+    Subagent children are intentionally excluded from the NOT IN subquery so
+    that a parent with only subagent children still appears as a chain tip.
     """
     try:
         conn = sqlite3.connect(str(db_path))
@@ -150,7 +162,7 @@ def read_chain_tips(db_path: Path, profile_name: str) -> list[dict]:
             FROM sessions
             WHERE message_count > 0
               AND title IS NOT NULL
-              AND (source IN ('tui', 'cli') OR source IS NULL)
+              AND source IN ('tui', 'cli')
               AND (archived IS NULL OR archived = 0)
               AND id NOT IN (
                   SELECT DISTINCT parent_session_id FROM sessions
@@ -167,6 +179,71 @@ def read_chain_tips(db_path: Path, profile_name: str) -> list[dict]:
         return []
 
 
+def read_chain_messages(db_path: Path, sid: str) -> list[dict]:
+    """Read the full stitched message history for a chain-tip session.
+
+    Walks the parent_session_id chain upward, following only parents whose
+    end_reason is 'compression' or 'cli_close' (these are the sessions the
+    Hermes CLI compressed/closed to start this continuation). Produces a flat
+    list ordered root → ... → tip, which is exactly what the WebUI stores in
+    sidecar files to enable the "see older messages" scroll-back feature.
+
+    Uses stitch logic equivalent to get_cli_session_messages(stitch_continuations=True)
+    in the WebUI backend.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.execute("PRAGMA query_only = 1")
+        conn.row_factory = sqlite3.Row
+
+        # Build the ancestor chain: [oldest_ancestor, ..., parent, sid]
+        chain = [sid]
+        current_id = sid
+        seen = {current_id}
+
+        for _ in range(20):  # max 20 hops up the chain
+            current_row = conn.execute(
+                "SELECT parent_session_id FROM sessions WHERE id=?",
+                (current_id,)
+            ).fetchone()
+            if not current_row:
+                break
+            parent_id = current_row["parent_session_id"]
+            if not parent_id or parent_id in seen:
+                break
+            # Only follow a parent if the parent itself ended via compression/cli_close
+            # (meaning the current session is its direct continuation)
+            parent_row = conn.execute(
+                "SELECT end_reason FROM sessions WHERE id=?",
+                (parent_id,)
+            ).fetchone()
+            if not parent_row:
+                break
+            if parent_row["end_reason"] not in ("compression", "cli_close"):
+                break
+            chain.insert(0, parent_id)
+            seen.add(parent_id)
+            current_id = parent_id
+
+        # Fetch all messages across the chain in chronological order
+        placeholders = ",".join("?" * len(chain))
+        rows = conn.execute(f"""
+            SELECT role, content, timestamp
+            FROM messages
+            WHERE session_id IN ({placeholders})
+            ORDER BY timestamp ASC, id ASC
+        """, chain).fetchall()
+
+        conn.close()
+        return [
+            {"role": r["role"], "content": r["content"], "timestamp": r["timestamp"]}
+            for r in rows
+        ]
+    except Exception as e:
+        log.warning(f"Could not read chain messages for {sid} in {db_path}: {e}")
+        return []
+
+
 # ── Index file operations ───────────────────────────────────────────────────────
 def load_index() -> list[dict]:
     """Load _index.json, returning a list of session entries."""
@@ -177,7 +254,6 @@ def load_index() -> list[dict]:
         raw = json.loads(index_path.read_text())
         if isinstance(raw, list):
             return raw
-        # Handle wrapped format (unlikely but safe)
         for key in ("sessions", "items", "entries"):
             if key in raw:
                 return raw[key]
@@ -202,49 +278,37 @@ def save_index(items: list[dict]) -> bool:
 
 
 # ── Sidecar file operations ─────────────────────────────────────────────────────
-def load_template_sidecar() -> dict | None:
-    """Load an existing sidecar as a structural template for new ones."""
-    for f in sorted(WEBUI_SESSIONS_DIR.glob("*.json")):
-        if f.name in ("_index.json", "_index.json.tmp", "_daemon_state.json"):
-            continue
-        try:
-            s = json.loads(f.read_text())
-            if isinstance(s, dict) and "session_id" in s:
-                return s
-        except Exception:
-            continue
-    return None
+def make_sidecar(row: dict, messages: list[dict]) -> dict:
+    """Build a sidecar dict from a state.db row with full message content.
 
-
-def make_sidecar(row: dict, template: dict | None = None) -> dict:
-    """Build a minimal sidecar dict from a state.db row."""
-    sidecar = dict(template) if template else {}
+    The messages list should be the full stitched chain history (root → tip)
+    so that the WebUI's 'see older messages' scroll-back works correctly.
+    """
     ts_updated = row.get("ended_at") or row.get("started_at") or 0
-
-    sidecar.update({
+    return {
         "session_id": row["id"],
         "title": row.get("title"),
         "created_at": row.get("started_at"),
         "updated_at": ts_updated,
         "parent_session_id": row.get("parent_session_id"),
-        "message_count": row.get("message_count", 0),
+        "message_count": len(messages),
         "is_cli_session": True,
         "source_tag": row.get("source") or "tui",
         "raw_source": row.get("source") or "tui",
         "session_source": "cli",
         "source_label": "TUI",
+        "read_only": False,
         "pinned": False,
         "archived": False,
         "active_stream_id": None,
         "pending_user_message": None,
         "pending_attachments": [],
-        "messages": [],
+        "messages": messages,
         "tool_calls": [],
         "context_messages": [],
         "_recovered_from_state_db": True,
         "_recovered_at": datetime.now(timezone.utc).isoformat(),
-    })
-    return sidecar
+    }
 
 
 def write_sidecar(session_id: str, sidecar: dict) -> bool:
@@ -260,15 +324,43 @@ def write_sidecar(session_id: str, sidecar: dict) -> bool:
         return False
 
 
-# ── Daemon state (persistent fingerprints) ──────────────────────────────────────
+def cleanup_orphaned_sidecars(current_tip_ids: set[str]) -> int:
+    """Delete sidecar files on disk that are NOT in the current chain-tip index.
+
+    This handles archived sessions, deleted sessions, and sessions superseded
+    by a continuation — their stale sidecars would otherwise remain on disk
+    and appear in the WebUI sidebar (since WebUI globs all *.json files).
+
+    Skips files whose names begin with '_' (index, daemon state, tmp files).
+    Returns the number of files deleted.
+    """
+    deleted = 0
+    for f in list(WEBUI_SESSIONS_DIR.glob("*.json")):
+        if f.name.startswith("_"):
+            continue
+        if f.stem not in current_tip_ids:
+            try:
+                f.unlink()
+                log.info(f"  Deleted orphaned sidecar: {f.name}")
+                deleted += 1
+            except OSError as e:
+                log.warning(f"  Could not delete orphaned sidecar {f.name}: {e}")
+    return deleted
+
+
+# ── Daemon state (persistent fingerprints + per-session message counts) ──────────
 def load_daemon_state() -> dict:
-    """Load the daemon's own watermark state."""
+    """Load the daemon's own persistent state."""
     if not DAEMON_STATE_PATH.exists():
-        return {"profiles": {}, "version": 1}
+        return {"profiles": {}, "session_msg_counts": {}, "version": 2}
     try:
-        return json.loads(DAEMON_STATE_PATH.read_text())
+        state = json.loads(DAEMON_STATE_PATH.read_text())
+        # Migrate v1 state (no session_msg_counts)
+        if "session_msg_counts" not in state:
+            state["session_msg_counts"] = {}
+        return state
     except (json.JSONDecodeError, OSError):
-        return {"profiles": {}, "version": 1}
+        return {"profiles": {}, "session_msg_counts": {}, "version": 2}
 
 
 def save_daemon_state(state: dict) -> None:
@@ -306,34 +398,46 @@ def process_profile(
     profile_name: str,
     db_path: Path,
     index_by_id: dict[str, dict],
-    existing_sidecars: set[str],
-    template: dict | None,
-) -> tuple[list[dict], int]:
-    """Process one profile: find new sessions, create sidecars & index entries.
+    session_msg_counts: dict[str, int],
+) -> int:
+    """Process one profile: sync all chain-tip sessions to index + sidecars.
 
-    Returns (new_index_entries, sidecars_written_count).
+    For each chain-tip session:
+      - Checks if the sidecar is missing or its message count has changed
+      - If so: reads the full stitched message history and rewrites the sidecar
+      - Always adds the session to the index (index is rebuilt from scratch each cycle)
+
+    Returns the number of sidecars written this cycle.
     """
     rows = read_chain_tips(db_path, profile_name)
-    new_entries: list[dict] = []
     sidecars_written = 0
 
     for row in rows:
         sid = row["id"]
+        db_msg_count = row.get("message_count", 0)
+        sidecar_path = WEBUI_SESSIONS_DIR / f"{sid}.json"
 
-        # Already in index → skip
-        if sid in index_by_id:
-            continue
+        # Change detection: rewrite sidecar only when needed
+        sidecar_exists = sidecar_path.exists()
+        stored_count = session_msg_counts.get(sid)
+        needs_write = (
+            not sidecar_exists
+            or stored_count is None
+            or stored_count != db_msg_count
+        )
 
-        # Write sidecar if missing
-        if sid not in existing_sidecars:
-            sidecar = make_sidecar(row, template)
+        if needs_write:
+            messages = read_chain_messages(db_path, sid)
+            sidecar = make_sidecar(row, messages)
             if write_sidecar(sid, sidecar):
                 sidecars_written += 1
-                existing_sidecars.add(sid)
-            else:
-                continue
+                session_msg_counts[sid] = db_msg_count
+                log.info(
+                    f"  [{profile_name}] Wrote sidecar {sid} "
+                    f"({len(messages)} stitched msgs, db_count={db_msg_count})"
+                )
 
-        # Build index entry
+        # Always build a fresh index entry for this chain tip
         ts = row.get("ended_at") or row.get("started_at") or 0
         entry = {
             "session_id": sid,
@@ -341,25 +445,16 @@ def process_profile(
             "created_at": row.get("started_at"),
             "updated_at": ts,
             "parent_session_id": row.get("parent_session_id"),
-            "message_count": row.get("message_count", 0),
+            "message_count": db_msg_count,
             "is_cli_session": True,
             "source_tag": row.get("source") or "tui",
             "profile": profile_name,
             "pinned": False,
             "archived": False,
         }
-        new_entries.append(entry)
         index_by_id[sid] = entry
 
-        # Set pre_compression_snapshot on parent if it exists in the index
-        parent_id = row.get("parent_session_id")
-        if parent_id and parent_id in index_by_id:
-            parent_entry = index_by_id[parent_id]
-            if not parent_entry.get("pre_compression_snapshot"):
-                parent_entry["pre_compression_snapshot"] = True
-                log.info(f"  Set pre_compression_snapshot=true on parent {parent_id}")
-
-    return new_entries, sidecars_written
+    return sidecars_written
 
 
 def poll_once(
@@ -368,59 +463,68 @@ def poll_once(
 ) -> tuple[bool, int, int]:
     """Run one poll cycle — rebuild the WebUI index from scratch.
 
-    Each cycle reads chain-tip sessions from every profile and writes
-    the complete _index.json, so superseded chain tips are automatically
-    removed.  Sidecar files for sessions that still exist are kept;
-    orphaned sidecars can be cleaned separately.
+    Each cycle:
+      1. Reads chain-tip sessions from every profile
+      2. Writes/updates sidecars with full stitched messages (change-detected)
+      3. Writes a complete fresh _index.json
+      4. Deletes orphaned sidecar files not in the current index
+      5. Prunes stale per-session counts from daemon state
 
     Returns (changed, total_index_entries, total_sidecars_written).
     """
-    # Rebuild index from scratch every cycle
     index_by_id: dict[str, dict] = {}
-
-    existing_sidecars = {
-        f.stem for f in WEBUI_SESSIONS_DIR.glob("*.json")
-        if f.name not in ("_index.json", "_index.json.tmp", "_daemon_state.json")
-    }
-
-    template = load_template_sidecar()
+    session_msg_counts: dict[str, int] = daemon_state.setdefault("session_msg_counts", {})
+    profiles_seen: dict[str, str] = daemon_state.setdefault("profiles", {})
     total_sidecars = 0
-    profiles_seen = daemon_state.setdefault("profiles", {})
     changed = False
 
     for profile_name, db_path in sorted(profiles.items()):
-        # Read chain tips and add all of them to the fresh index
-        new_entries, sidecars = process_profile(
-            profile_name, db_path, index_by_id, existing_sidecars, template,
-        )
+        fp = compute_fingerprint(db_path)
+        old_fp = profiles_seen.get(profile_name)
+        profile_changed = fp is not None and fp != old_fp
 
+        sidecars = process_profile(
+            profile_name, db_path, index_by_id, session_msg_counts,
+        )
         total_sidecars += sidecars
 
-        # Track fingerprint for diagnostics (no longer used for skip)
-        fp = compute_fingerprint(db_path)
         if fp is not None:
             profiles_seen[profile_name] = fp
 
-        if new_entries or sidecars > 0:
+        if profile_changed or sidecars > 0:
             changed = True
             log.info(
-                f"  {profile_name}: +{len(new_entries)} index entries, "
-                f"+{sidecars} sidecars"
+                f"  [{profile_name}] fingerprint={'changed' if profile_changed else 'same'}, "
+                f"{sidecars} sidecar(s) updated"
             )
 
-    # Save the complete rebuilt index (not an append)
-    if changed:
+    # Always save the complete rebuilt index (cheap, ensures consistency)
+    current_tip_ids = set(index_by_id.keys())
+    old_ids = {e.get("session_id") for e in load_index()}
+    if current_tip_ids != old_ids or changed:
+        changed = True
         if save_index(list(index_by_id.values())):
             log.info(
-                f"Rebuilt _index.json with {len(index_by_id)} entries "
-                f"from {len(profiles)} profile(s)"
+                f"Rebuilt _index.json: {len(index_by_id)} entries "
+                f"across {len(profiles)} profile(s)"
             )
         else:
             log.error("Failed to save rebuilt _index.json")
 
-    # Save daemon state (fingerprints)
-    save_daemon_state(daemon_state)
+    # Remove orphaned sidecar files (not in current chain-tip set)
+    deleted = cleanup_orphaned_sidecars(current_tip_ids)
+    if deleted > 0:
+        log.info(f"Cleaned up {deleted} orphaned sidecar(s)")
+        changed = True
 
+    # Prune session_msg_counts for sessions no longer in the chain-tip set
+    stale = [k for k in list(session_msg_counts.keys()) if k not in current_tip_ids]
+    for k in stale:
+        del session_msg_counts[k]
+    if stale:
+        log.debug(f"Pruned {len(stale)} stale session count(s) from daemon state")
+
+    save_daemon_state(daemon_state)
     return changed, len(index_by_id), total_sidecars
 
 
@@ -447,13 +551,16 @@ def main():
 
     # Load daemon state
     daemon_state = load_daemon_state()
-    log.info(f"Loaded daemon state with {len(daemon_state.get('profiles', {}))} tracked profiles")
+    log.info(
+        f"Loaded daemon state: {len(daemon_state.get('profiles', {}))} tracked profiles, "
+        f"{len(daemon_state.get('session_msg_counts', {}))} cached message counts"
+    )
 
     # Bootstrap: do an immediate run
     log.info("Running initial poll...")
     changed, entries, sidecars = poll_once(profiles, daemon_state)
     if changed:
-        log.info(f"Initial poll: +{entries} index entries, +{sidecars} sidecars")
+        log.info(f"Initial poll: {entries} index entries, {sidecars} sidecars written")
         nudge_webui()
     else:
         log.info("Initial poll: everything up to date")
@@ -466,7 +573,7 @@ def main():
         try:
             changed, entries, sidecars = poll_once(profiles, daemon_state)
             if changed:
-                log.info(f"Poll #{tick}: +{entries} index entries, +{sidecars} sidecars")
+                log.info(f"Poll #{tick}: {entries} index entries, {sidecars} sidecars written")
                 nudge_webui()
 
             # Re-discover profiles periodically (every 60 ticks = ~15 min)

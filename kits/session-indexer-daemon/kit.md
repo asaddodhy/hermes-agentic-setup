@@ -1,7 +1,7 @@
 ---
 name: session-indexer-daemon
-description: "Bridges Hermes CLI/TUI sessions from state.db into the WebUI session index — polls every 15s, writes only chain-tip sessions, rebuilds the index from scratch each cycle."
-version: 1.0.0
+description: "Bridges Hermes CLI/TUI sessions from state.db into the WebUI session index — polls every 15s, writes only chain-tip sessions, rebuilds the index from scratch each cycle, cleans up orphaned sidecars automatically."
+version: 2.0.0
 author: dodhya
 models:
   primary: any
@@ -29,7 +29,7 @@ security:
     - "Runs as the logged-in user via launchd (gui/$UID)"
   known_threats:
     - "Daemon writes to ~/.hermes/webui/sessions/ — same dir as the WebUI. No cross-user exposure."
-tags: [sessions, webui, daemon, sync, chain-tip]
+tags: [sessions, webui, daemon, sync, chain-tip, sidecar]
 src:
   fileManifest:
     - src/session_indexer_daemon.py
@@ -40,12 +40,14 @@ src:
 
 ## Goal
 
-Keep the Hermes WebUI session index (`_index.json`) in sync with the CLI/desktop app's sessions — showing only **chain-tip sessions** (the latest session in each continuation chain), rebuilt from scratch every poll cycle so stale entries never accumulate.
+Keep the Hermes WebUI session index (`_index.json`) and sidecar files in sync with the CLI/desktop app's sessions — showing only **chain-tip sessions** (the latest session in each continuation chain), with full stitched message history so the WebUI's "see older messages" scroll-back works correctly.
 
 ## When to Use
 
 - After installing the Hermes WebUI and you want the session list to match the desktop app
 - Sessions that have been continued (compressed) keep showing up in the WebUI
+- WebUI shows "Session not available" when you click a CLI session
+- Extra/stale sessions appear in the WebUI sidebar that are not in the desktop app
 - A fresh machine setup where the WebUI session list is empty or stale
 - After Mac sleep/wake cycles where the WebUI lost track of sessions
 
@@ -60,9 +62,13 @@ Keep the Hermes WebUI session index (`_index.json`) in sync with the CLI/desktop
                                           │  ai.hermes.session-  │
                                           │  indexer             │
                                           │                      │
-                                          │  writes to           │
+                                          │  writes              │
                                           │  _index.json         │
                                           │  + sidecar .json     │
+                                          │  (with messages)     │
+                                          │                      │
+                                          │  deletes orphaned    │
+                                          │  sidecars            │
                                           └──────────┬───────────┘
                                                      │
                                                      ▼
@@ -74,13 +80,39 @@ Keep the Hermes WebUI session index (`_index.json`) in sync with the CLI/desktop
                                           └──────────────────────┘
 ```
 
-The daemon:
+Each poll cycle the daemon:
 
-1. **Discovers all Hermes profiles** by scanning `~/.hermes/state.db` (default) and `~/.hermes/profiles/*/state.db` (named profiles)
-2. **Queries chain tips** — sessions not referenced as a parent by any other TUI/CLI/WebUI/Telegram session (subagent sub-sessions are correctly excluded — they are NOT continuations)
-3. **Rebuilds `_index.json` from scratch** each cycle — no stale accumulation
-4. **Writes missing sidecar `.json` files** for each session
-5. **Nudges the WebUI** to warm its session cache
+1. **Discovers all Hermes profiles** — `~/.hermes/state.db` (default) and `~/.hermes/profiles/*/state.db` (named profiles)
+2. **Queries chain tips per profile** — sessions not referenced as a parent by any continuation session; subagent children excluded
+3. **Change-detected sidecar sync** — reads per-session message count from state.db; only rewrites a sidecar when the count has changed or the file is missing
+4. **Full stitched message history** — walks the `parent_session_id` chain up to the root, concatenates all ancestor messages so the WebUI's "see older messages" scroll-back works
+5. **Rebuilds `_index.json` from scratch** — no stale accumulation; superseded chain tips automatically disappear
+6. **Cleans orphaned sidecars** — deletes any `*.json` sidecar whose session is no longer a chain tip; prevents archived/deleted/superseded sessions appearing in the sidebar
+7. **Nudges the WebUI** to warm its session cache
+
+## Architecture Notes
+
+### Why sidecars need full stitched messages
+
+The WebUI's "see older messages" button does NOT navigate to a different session — it expands `msg_limit` within the same session's flat message list. The sidecar for a chain-tip session must contain ALL messages from the entire ancestor chain (root → ... → tip), concatenated in timestamp order. Without this, "see older messages" only scrolls within the current segment.
+
+The daemon reads the full stitched history using `read_chain_messages()` which walks `parent_session_id` upward following `compression`/`cli_close` end reasons.
+
+### Why orphan cleanup is critical
+
+The WebUI globs ALL `*.json` files in `~/.hermes/webui/sessions/` — not just entries in `_index.json`. Without cleanup, sidecars for archived sessions, deleted sessions, or sessions superseded by a continuation remain on disk and appear in the WebUI sidebar even after the desktop app has removed them.
+
+### Sidecar vs state.db
+
+Sidecars are a **WebUI-only display cache**. The Hermes backend never reads them — it always uses `state.db`. Deleting a sidecar does NOT affect any conversation history; it only affects WebUI rendering. The daemon can safely recreate any sidecar from state.db at any time.
+
+### Change detection layers
+
+| Layer | What changes | What triggers a rewrite |
+|---|---|---|
+| **Profile fingerprint** | MD5(COUNT + MAX(started_at) + SUM(message_count)) | Any new session or message addition |
+| **Per-session count** | `session_msg_counts[sid]` in daemon state | When count in state.db ≠ stored count |
+| **Sidecar missing** | File absent from disk | Always triggers a write |
 
 ## Setup
 
@@ -124,40 +156,48 @@ launchctl load ~/Library/LaunchAgents/ai.hermes.session-indexer.plist
 
 > **Note:** Launchd plist paths are literal XML — `~` and `${HOME}` are NOT expanded. You must hardcode `/Users/<username>/...`.
 
-### Step 3 — Verify the daemon is running
+### Step 3 — Clear any stale daemon state
+
+If migrating from v1, delete the old daemon state to force a clean initial sync:
+
+```bash
+rm -f ~/.hermes/webui/sessions/_daemon_state.json
+```
+
+### Step 4 — Verify the daemon is running
 
 ```bash
 # Check process
 launchctl list ai.hermes.session-indexer
 
 # Check log
-tail -5 ~/.hermes/session-indexer.log
+tail -10 ~/.hermes/session-indexer.log
 ```
 
-Expected output shows polls every ~15 seconds:
+Expected output on first run:
 
 ```
-2026-06-20 00:30:19 [INFO] Rebuilt _index.json with 21 entries from 3 profile(s)
-2026-06-20 00:30:19 [INFO] Poll #1: +21 index entries, +0 sidecars
+[INFO] Deleted orphaned sidecar: <old_session>.json
+[INFO] Cleaned up N orphaned sidecar(s)
+[INFO] [default] Wrote sidecar <sid> (557 stitched msgs, db_count=203)
+[INFO] Rebuilt _index.json: 22 entries across 3 profile(s)
+[INFO] Initial poll: 22 index entries, 22 sidecars written
 ```
 
-### Step 4 — Check the WebUI session list
+### Step 5 — Check the WebUI session list
 
-Open the WebUI in your browser and verify the session list in the sidebar shows the correct chain-tip sessions — only the latest session in each continuation chain.
+Open the WebUI in your browser and verify:
+- Session list matches the desktop app (chain tips only)
+- Clicking a session shows the full conversation
+- "See older messages" scrolls all the way back to the root session
 
 ### Restarting after updates
-
-If you update the daemon script:
 
 ```bash
 launchctl kickstart -k gui/$(id -u)/ai.hermes.session-indexer
 ```
 
-This kills any existing instance and starts a new one with the updated code.
-
 ## Configuration
-
-The daemon respects these environment variables (set in the plist's `EnvironmentVariables` dict):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -166,58 +206,29 @@ The daemon respects these environment variables (set in the plist's `Environment
 
 ## Constraints
 
-- **macOS only** — relies on launchd for lifecycle management. On Linux, a systemd user service would be needed
-- **Python 3.11+** — uses `pathlib.Path` extensively. The Hermes venv provides this
-- **WebUI must be running** — the daemon writes to the same sessions directory the WebUI reads from. If the WebUI is stopped, the index still gets written but the WebUI won't pick it up until next start
-- **No cross-platform** — not designed for Windows. The launchd plist is macOS-specific
-- **Sidecar cleanup not automatic** — orphaned sidecar `.json` files (from sessions that are no longer chain tips) are not cleaned up by the daemon. Run `session-indexer-daemon/scripts/clean-orphaned-sidecars.sh` if needed
+- **macOS only** — relies on launchd. On Linux, use a systemd user service
+- **Python 3.11+** — the Hermes venv provides this
+- **WebUI must be running** — the daemon writes to the sessions directory the WebUI reads from
+- **Sidecar files are large** — each sidecar contains the full stitched message history for its chain. For very long conversation chains this can be several MB per session
 
-### Troubleshooting orphaned sidecars
-
-If `~/.hermes/webui/sessions/` accumulates `.json` files for sessions no longer in the index, run:
-
-```bash
-python3 -c "
-import json, pathlib
-idx_path = pathlib.Path.home() / '.hermes/webui/sessions/_index.json'
-if not idx_path.exists(): exit(0)
-idx = json.loads(idx_path.read_text())
-valid_ids = {i['session_id'] for i in idx if i.get('session_id')}
-for f in pathlib.Path.home().glob('.hermes/webui/sessions/*.json'):
-    if f.name in ('_index.json','_index.json.tmp','_daemon_state.json'): continue
-    if f.stem not in valid_ids:
-        print(f'Removing {f.name}')
-        f.unlink()
-"
-```
-
-## Chain-Tip Logic
-
-The daemon's core SQL determines which sessions are chain tips:
+## Chain-Tip SQL
 
 ```sql
--- A session is a chain tip if:
+-- A session is a chain tip if it is a TUI/CLI session with no continuation children
 SELECT id, title, source, message_count
 FROM sessions
 WHERE message_count > 0
   AND title IS NOT NULL
-  AND (source IN ('tui', 'cli') OR source IS NULL)          -- only CLI/TUI sessions are displayed
-  AND (archived IS NULL OR archived = 0)                    -- not archived
+  AND source IN ('tui', 'cli')                               -- only CLI/TUI sessions
+  AND (archived IS NULL OR archived = 0)                     -- not archived
   AND id NOT IN (
       SELECT DISTINCT parent_session_id FROM sessions
       WHERE parent_session_id IS NOT NULL
-        AND source IN ('tui', 'cli', 'webui', 'telegram')   -- any child of these types = continuation
+        AND source IN ('tui', 'cli', 'webui', 'telegram')    -- continuation child types
+      -- NOTE: 'subagent' intentionally excluded — subagent children are task spawns,
+      -- not user continuations; they must NOT suppress their parent
   )
 ```
-
-Key design decisions:
-
-| Aspect | Choice | Rationale |
-|--------|--------|-----------|
-| **Sources displayed** | `tui`, `cli`, `NULL` | WebUI and Telegram sessions exist in state.db but are bridge entries — the daemon only surfaces desktop CLI sessions |
-| **Continuation types** | `tui`, `cli`, `webui`, `telegram` | If a session has a child from any of these sources, it's been "continued" and is no longer the chain tip |
-| **Subagent exclusion** | `subagent` NOT in continuation list | Subagent sub-sessions are internal task spawns, NOT user continuations. They don't affect chain-tip status |
-| **Index rebuild** | From scratch every cycle | Ensures superseded chain tips are automatically removed — no stale accumulation |
 
 ## Verification Checklist
 
@@ -225,48 +236,57 @@ Key design decisions:
 - [ ] Launchd plist deployed: `ls -la ~/Library/LaunchAgents/ai.hermes.session-indexer.plist`
 - [ ] Daemon running: `launchctl list ai.hermes.session-indexer` shows a PID
 - [ ] Daemon polling: `tail -3 ~/.hermes/session-indexer.log` shows recent poll entries
-- [ ] Index populated: `ls -la ~/.hermes/webui/sessions/_index.json` exists and has entries
-- [ ] WebUI shows correct sessions: Open WebUI sidebar — only chain tips visible
+- [ ] Index populated: `cat ~/.hermes/webui/sessions/_index.json | python3 -m json.tool | grep session_id | wc -l`
+- [ ] Sidecars have messages: `python3 -c "import json,pathlib; s=pathlib.Path.home()/'.hermes/webui/sessions'; f=next(x for x in s.glob('*.json') if not x.name.startswith('_')); d=json.loads(f.read_text()); print(f'{f.name}: {len(d.get(\"messages\",[]))} messages')"`
+- [ ] WebUI shows correct sessions: Open WebUI — only chain tips, no archived/deleted sessions
+- [ ] "See older messages" works: Click a continued session, scroll up, click "see older messages"
 
 ## Failures Overcome
 
-### Bug 1: Source filter too narrow (v1)
+### Bug 1: Source filter too narrow (v1.0)
 
-The original child-exclusion subquery only checked for `tui`/`cli` children:
+The original child-exclusion subquery only checked for `tui`/`cli` children, so a TUI parent with WebUI-only children was incorrectly treated as a chain tip.
 
-```sql
-AND (source IN ('tui', 'cli') OR source IS NULL)
-```
+**Fix:** Added `'webui'` and `'telegram'` to the continuation source list. Removed the `OR source IS NULL` catch-all (zero NULL-source children existed in practice).
 
-This meant a TUI parent with WebUI-only children was incorrectly treated as a chain tip. The root session of the "Hermes WebUI Reinstallation" chain kept being recovered.
+### Bug 2: Append-only index (v1.0)
 
-**Fix:** Added `'webui'` and `'telegram'` to the continuation source list. Removed the `OR source IS NULL` catch-all (no actual NULL-source children existed):
+The daemon only appended new chain tips to `_index.json` — it never removed superseded entries. After multiple continuations in the same chain, the index accumulated every intermediate tip.
 
-```sql
-AND source IN ('tui', 'cli', 'webui', 'telegram')
-```
+**Fix:** Rebuilt `_index.json` from scratch each cycle using only current chain tips.
 
-### Bug 2: Append-only index (v1)
+### Bug 3: Empty sidecar messages (v1.0)
 
-The daemon only **appended** new chain tips to `_index.json` — it never removed superseded entries. After multiple continuations in the same chain, the index had 6 entries for the same chain (root, #2, #4, #5, #6, #8) when it should have had only 1 (#8).
+The daemon wrote `"messages": []` in every sidecar. The WebUI requires real messages to render a session — an empty `messages` array causes "Session not available" which then deletes the sidecar on save, causing the session to disappear from the sidebar on the next poll.
 
-**Fix:** Changed `poll_once()` to rebuild `_index.json` from scratch each cycle using only current chain tips. No append, no stale accumulation.
+**Fix (v2.0):** `make_sidecar()` now calls `read_chain_messages()` which reads the full stitched message history from state.db (walking the ancestor chain) and populates `messages` with real content.
+
+### Bug 4: Orphaned sidecars from archived/deleted sessions (v1.0)
+
+The WebUI globs ALL `*.json` files in the sessions directory, not just entries in `_index.json`. Old sidecar files for archived sessions, deleted sessions, and sessions from all profiles accumulated and appeared in the WebUI sidebar even though they were absent from the desktop app.
+
+**Fix (v2.0):** After each index rebuild, `cleanup_orphaned_sidecars()` deletes any `*.json` sidecar whose stem is not in the current chain-tip set. Skips files with names starting with `_` (index, daemon state). Applies across all profiles since all sidecars share one directory.
 
 ## Source Files
 
 ### `src/session_indexer_daemon.py`
 
-The main daemon script (~485 lines). Handles:
-- Profile discovery (default + named profiles)
-- Fingerprint-based change detection (MD5 of row count + MAX started_at)
-- Chain-tip SQL queries against each profile's state.db
-- Sidecar file creation/management
-- Atomic index writes (tmp + os.replace)
-- Graceful shutdown on SIGTERM/SIGINT
+The main daemon script. Key functions:
+
+| Function | Purpose |
+|---|---|
+| `discover_profiles()` | Find all profile state.dbs |
+| `compute_fingerprint()` | Cheap change detection: MD5(COUNT + MAX(started_at) + SUM(message_count)) |
+| `read_chain_tips()` | SQL query for chain-tip sessions |
+| `read_chain_messages()` | Walk parent chain, return full stitched message history |
+| `make_sidecar()` | Build sidecar dict with real messages |
+| `cleanup_orphaned_sidecars()` | Delete sidecars not in current chain-tip set |
+| `process_profile()` | Per-profile sync with change detection |
+| `poll_once()` | Full cycle: rebuild index + sidecars + cleanup |
 
 ### `src/ai.hermes.session-indexer.plist`
 
-Launchd service definition. Replace `__YOUR_USERNAME__` with your macOS username before deploying. Key settings:
+Launchd service definition. Replace `__YOUR_USERNAME__` with your macOS username before deploying.
 
 | Key | Value |
 |-----|-------|
