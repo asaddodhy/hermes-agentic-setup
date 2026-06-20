@@ -2,3 +2,6 @@
 # Lines starting with # are ignored. Empty lines are ignored.
 # Example:
 # ~/.config/some-tool/config.json
+
+# Hermes .env backup (one-off — main .env is covered by 01-hermes-core.sh)
+~/.hermes/.env.bak
