@@ -31,7 +31,10 @@ security:
   known_threats:
     - Binding to 0.0.0.0 without password exposes WebUI to LAN
     - Tailscale Serve uses HTTPS only — HTTP clients cannot reach through it
-tags: [hermes, webui, tailscale, remote-access]
+tags: [hermes, webui, tailscale, remote-access, session-indexer]
+next_steps:
+  - kit: session-indexer-daemon
+    reason: "Keeps the WebUI session list in sync with the desktop app — run immediately after this kit"
 src:
   fileManifest:
     - path: src/configs/com.parantoux.hermes-webui.plist
@@ -196,6 +199,36 @@ Where `<your-tailscale-hostname>` is the MagicDNS name shown by `tailscale statu
 
 Log in with the `HERMES_WEBUI_PASSWORD` you set in Step 2.
 
+### Step 7 — Set up the Session Indexer Daemon
+
+The WebUI's session list will be empty after a fresh install — it has no way to discover the Hermes CLI sessions already in `~/.hermes/state.db`. The **session-indexer-daemon** bridges this gap: it polls all profiles every 15 seconds and keeps `_index.json` + sidecar files in sync with the desktop app.
+
+Without this daemon:
+- The WebUI sidebar shows no CLI sessions after a reinstall or sleep/wake
+- Sessions that have been continued (compressed) keep appearing in the WebUI even after the desktop app has moved on to the chain tip
+- Archived/deleted sessions can ghost back because stale sidecar files remain on disk
+
+**Run the session-indexer-daemon kit immediately after completing this kit:**
+
+```bash
+# Deploy the daemon script
+cp kits/session-indexer-daemon/src/session_indexer_daemon.py ~/.hermes/bin/
+chmod +x ~/.hermes/bin/session_indexer_daemon.py
+
+# Deploy and load the launchd plist (replace __YOUR_USERNAME__ with your macOS username)
+sed "s/__YOUR_USERNAME__/$(whoami)/g" \
+  kits/session-indexer-daemon/src/ai.hermes.session-indexer.plist \
+  > ~/Library/LaunchAgents/ai.hermes.session-indexer.plist
+
+launchctl load ~/Library/LaunchAgents/ai.hermes.session-indexer.plist
+
+# Verify — should show a PID within 5 seconds
+sleep 3 && launchctl list ai.hermes.session-indexer
+tail -5 ~/.hermes/session-indexer.log
+```
+
+See the [session-indexer-daemon kit](../session-indexer-daemon/kit.md) for full details, configuration options, and troubleshooting.
+
 ---
 
 ## Constraints
@@ -244,4 +277,7 @@ Log in with the `HERMES_WEBUI_PASSWORD` you set in Step 2.
 [ ] No Tailscale Serve rule on port 8787: tailscale --socket ~/.hermes/tailscale.sock serve status (must not show :8787)
 [ ] Remote reachable from phone: https://<your-hostname>.ts.net loads login page
 [ ] Mic works on phone: tap mic button, grants permission, transcribes
+[ ] Session indexer daemon running: launchctl list ai.hermes.session-indexer (shows PID)
+[ ] Session indexer polling: tail -3 ~/.hermes/session-indexer.log shows recent entries
+[ ] WebUI session list populated: open WebUI sidebar — CLI sessions visible, chain tips only
 ```
