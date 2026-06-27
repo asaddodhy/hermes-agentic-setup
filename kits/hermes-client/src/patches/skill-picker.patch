@@ -1,0 +1,402 @@
+diff --git a/api/src/@types/message.ts b/api/src/@types/message.ts
+index bf7c9d6..07dbd00 100644
+--- a/api/src/@types/message.ts
++++ b/api/src/@types/message.ts
+@@ -43,6 +43,7 @@ export type MessageRequestBody = {
+ export type ChatRequestBody = {
+   conversationId?: string;
+   text?: string;
++  skillName?: string;
+ };
+ 
+ export type ListByConversation = RequestHandler<
+diff --git a/api/src/routes/message/controller.ts b/api/src/routes/message/controller.ts
+index c0d9f39..1ac634a 100644
+--- a/api/src/routes/message/controller.ts
++++ b/api/src/routes/message/controller.ts
+@@ -102,7 +102,7 @@ const create: Create = async (req, res, next) => {
+  */
+ const chat: Chat = async (req, res, next) => {
+   try {
+-    const { conversationId, text } = req.body;
++    const { conversationId, text, skillName } = req.body;
+     const uploadedFiles = (req.files as Express.Multer.File[]) || [];
+ 
+     const convRepo = AppDataSource.getRepository(Conversation);
+@@ -173,6 +173,7 @@ const chat: Chat = async (req, res, next) => {
+         profile,
+         sessionId: conv.sessionKey ?? null,
+         imagePaths,
++        skillName,
+       });
+ 
+       // Persist the assistant turn BEFORE we close the SSE response. The
+diff --git a/api/src/services/hermes/chat.ts b/api/src/services/hermes/chat.ts
+index 4cc62f1..3c2a27c 100644
+--- a/api/src/services/hermes/chat.ts
++++ b/api/src/services/hermes/chat.ts
+@@ -13,6 +13,8 @@ export interface ChatOptions {
+   sessionId?: string | null;
+   /** Image attachments — passed via repeated `--image` flags. */
+   imagePaths?: string[];
++  /** Skill name to preload via `-s` flag (only on new sessions, not on resume). */
++  skillName?: string;
+ }
+ 
+ export interface ChatStreamResult {
+@@ -48,6 +50,9 @@ const SESSION_SCAN_WINDOW = 4_096;
+ 
+ function buildArgs(message: string, resumeSessionId: string | null, opts: ChatOptions): string[] {
+   const args = ['chat', '-Q', '--source', SESSION_SOURCE, '-q', message];
++  if (opts.skillName && !resumeSessionId) {
++    args.push('-s', opts.skillName);
++  }
+   if (resumeSessionId) {
+     args.push('--resume', resumeSessionId);
+   }
+diff --git a/client/src/features/message/send/model/useSendMessage.ts b/client/src/features/message/send/model/useSendMessage.ts
+index 08b7cd6..2cb09c5 100644
+--- a/client/src/features/message/send/model/useSendMessage.ts
++++ b/client/src/features/message/send/model/useSendMessage.ts
+@@ -27,7 +27,7 @@ export interface SendMessageState {
+   streamError: string | null;
+   pendingUserText: string;
+   pendingFilesPreviews: MessageFile[];
+-  send: (text: string, files: File[]) => Promise<void>;
++  send: (text: string, files: File[], skillName?: string) => Promise<void>;
+   abort: () => void;
+   clearError: () => void;
+ }
+@@ -60,7 +60,7 @@ export function useSendMessage({
+   const clearError = useCallback(() => setStreamError(null), []);
+ 
+   const send = useCallback(
+-    async (text: string, files: File[]) => {
++    async (text: string, files: File[], skillName?: string) => {
+       const trimmed = text.trim();
+       if ((!trimmed && files.length === 0) || !conversationId || isStreaming) return;
+ 
+@@ -89,6 +89,7 @@ export function useSendMessage({
+         form.append('conversationId', conversationId);
+         if (trimmed) form.append('text', trimmed);
+         files.forEach((f) => form.append('files', f));
++        if (skillName) form.append('skillName', skillName);
+ 
+         const res = await fetch(`${API_BASE_URL}/message/chat`, {
+           method: 'POST',
+diff --git a/client/src/widgets/chat/model/types.ts b/client/src/widgets/chat/model/types.ts
+index e2d571b..a03dbb3 100644
+--- a/client/src/widgets/chat/model/types.ts
++++ b/client/src/widgets/chat/model/types.ts
+@@ -17,7 +17,7 @@ export interface ChatState {
+   pendingUserText: string;
+   pendingFilesPreviews: MessageFile[];
+ 
+-  send: (text: string, files: File[]) => Promise<void>;
++  send: (text: string, files: File[], skillName?: string) => Promise<void>;
+   loadMore: () => void;
+   handleScroll: () => void;
+   clearError: () => void;
+diff --git a/client/src/widgets/chat/ui/ChatInput.tsx b/client/src/widgets/chat/ui/ChatInput.tsx
+index 1dd4630..4156ce8 100644
+--- a/client/src/widgets/chat/ui/ChatInput.tsx
++++ b/client/src/widgets/chat/ui/ChatInput.tsx
+@@ -1,5 +1,5 @@
+-import { useState, useRef, useCallback } from 'react';
+-import { Box, TextField, IconButton, Chip } from '@mui/material';
++import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
++import { Box, TextField, IconButton, Chip, Paper, List, ListItemButton, ListItemText, Popper, Typography } from '@mui/material';
+ import {
+   Send,
+   AttachFile,
+@@ -7,23 +7,74 @@ import {
+   InsertDriveFileOutlined,
+   ImageOutlined,
+ } from '@mui/icons-material';
++import { useListSkillsQuery, type SkillInfo } from '../../../entities/skill';
+ 
+ interface ChatInputProps {
+-  onSend: (text: string, files: File[]) => Promise<void>;
++  onSend: (text: string, files: File[], skillName?: string) => Promise<void>;
+   isStreaming: boolean;
+ }
+ 
++// Trigger: "/" alone or "/anything" — show picker filtered by whatever follows the slash
++const COMMAND_RE = /^\/(.*)$/;
++
+ export default function ChatInput({ onSend, isStreaming }: ChatInputProps) {
+   const [text, setText] = useState('');
+   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
++  const [activeSkill, setActiveSkill] = useState<string | null>(null);
++  const [showSkillPicker, setShowSkillPicker] = useState(false);
++  const [skillFilter, setSkillFilter] = useState('');
+   const fileInputRef = useRef<HTMLInputElement>(null);
+   const inputRef = useRef<HTMLInputElement>(null);
++  const inputAnchorRef = useRef<HTMLDivElement>(null);
++
++  // Fetch available skills (cached for 5 min, so no repeated calls)
++  const { data: skills = [], isLoading } = useListSkillsQuery(undefined, {
++    skip: !showSkillPicker && !activeSkill,
++  });
++
++  const filteredSkills = useMemo(
++    () =>
++      showSkillPicker
++        ? (skills as SkillInfo[]).filter(
++            (s: SkillInfo) =>
++              !skillFilter ||
++              s.name.toLowerCase().includes(skillFilter.toLowerCase())
++          )
++        : [],
++    [skills, skillFilter, showSkillPicker]
++  );
+ 
++  // Detect "/" prefix — open picker, filter by what follows the slash
+   const handleTextChange = useCallback(
+-    (e: React.ChangeEvent<HTMLInputElement>) => setText(e.target.value),
++    (e: React.ChangeEvent<HTMLInputElement>) => {
++      const newText = e.target.value;
++      setText(newText);
++
++      const match = newText.match(COMMAND_RE);
++      if (match) {
++        setSkillFilter(match[1]); // filter = whatever the user typed after "/"
++        setShowSkillPicker(true);
++      } else {
++        setShowSkillPicker(false);
++        setSkillFilter('');
++      }
++    },
+     []
+   );
+ 
++  const handleSkillSelect = useCallback((skillName: string) => {
++    setActiveSkill(skillName);
++    setText('');
++    setShowSkillPicker(false);
++    setSkillFilter('');
++    setTimeout(() => inputRef.current?.focus(), 0);
++  }, []);
++
++  const handleClearSkill = useCallback(() => {
++    setActiveSkill(null);
++    setTimeout(() => inputRef.current?.focus(), 0);
++  }, []);
++
+   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+     const selected = e.target.files;
+     if (!selected) return;
+@@ -37,19 +88,46 @@ export default function ChatInput({ onSend, isStreaming }: ChatInputProps) {
+     if ((!trimmed && pendingFiles.length === 0) || isStreaming) return;
+ 
+     const filesToSend = [...pendingFiles];
++    const skillToSend = activeSkill;
+     setText('');
+     setPendingFiles([]);
+-    await onSend(trimmed, filesToSend);
++    setActiveSkill(null); // skill is loaded into session via -s; clear chip
++    setShowSkillPicker(false);
++    setSkillFilter('');
++    await onSend(trimmed, filesToSend, skillToSend ?? undefined);
+     setTimeout(() => inputRef.current?.focus(), 0);
+-  }, [text, pendingFiles, isStreaming, onSend]);
++  }, [text, pendingFiles, activeSkill, isStreaming, onSend]);
+ 
+   const handleKeyDown = (e: React.KeyboardEvent) => {
+     if (e.key === 'Enter' && !e.shiftKey) {
+       e.preventDefault();
+       handleSend();
+     }
++    if (e.key === 'Escape' && showSkillPicker) {
++      setShowSkillPicker(false);
++      setSkillFilter('');
++    }
+   };
+ 
++  const popperRef = useRef<HTMLDivElement>(null);
++
++  // Close skill picker when clicking outside both the input bar and the popper
++  useEffect(() => {
++    if (!showSkillPicker) return;
++    const handler = (e: MouseEvent) => {
++      const target = e.target as Node;
++      const insideInput = inputAnchorRef.current?.contains(target);
++      const insidePopper = popperRef.current?.contains(target);
++      if (!insideInput && !insidePopper) {
++        setShowSkillPicker(false);
++        setSkillFilter('');
++      }
++    };
++    // Use capture phase so we see the event before MUI does
++    document.addEventListener('mousedown', handler, true);
++    return () => document.removeEventListener('mousedown', handler, true);
++  }, [showSkillPicker]);
++
+   return (
+     <Box
+       sx={{
+@@ -60,6 +138,23 @@ export default function ChatInput({ onSend, isStreaming }: ChatInputProps) {
+         flexShrink: 0,
+       }}
+     >
++      {/* Active skill chip */}
++      {activeSkill && (
++        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
++          <Chip
++            icon={<Typography sx={{ fontSize: 12, ml: 0.5 }}>📋</Typography>}
++            label={activeSkill}
++            size="small"
++            onDelete={handleClearSkill}
++            deleteIcon={<Close sx={{ fontSize: 14 }} />}
++            color="primary"
++            variant="outlined"
++            sx={{ maxWidth: 300, fontSize: '0.72rem' }}
++          />
++        </Box>
++      )}
++
++      {/* File preview chips */}
+       {pendingFiles.length > 0 && (
+         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
+           {pendingFiles.map((f, i) => (
+@@ -81,7 +176,9 @@ export default function ChatInput({ onSend, isStreaming }: ChatInputProps) {
+           ))}
+         </Box>
+       )}
++
+       <Box
++        ref={inputAnchorRef}
+         sx={{
+           display: 'flex',
+           alignItems: 'center',
+@@ -95,7 +192,13 @@ export default function ChatInput({ onSend, isStreaming }: ChatInputProps) {
+           '&:focus-within': { borderColor: 'primary.main' },
+         }}
+       >
+-        <input ref={fileInputRef} type="file" multiple hidden onChange={handleFileChange} />
++        <input
++          ref={fileInputRef}
++          type="file"
++          multiple
++          hidden
++          onChange={handleFileChange}
++        />
+         <IconButton
+           onClick={() => fileInputRef.current?.click()}
+           disabled={isStreaming || pendingFiles.length >= 5}
+@@ -104,21 +207,100 @@ export default function ChatInput({ onSend, isStreaming }: ChatInputProps) {
+         >
+           <AttachFile sx={{ fontSize: 18 }} />
+         </IconButton>
+-        <TextField
+-          inputRef={inputRef}
+-          fullWidth
+-          multiline
+-          minRows={1}
+-          maxRows={8}
+-          variant="standard"
+-          placeholder="Type a message..."
+-          value={text}
+-          onChange={handleTextChange}
+-          onKeyDown={handleKeyDown}
+-          disabled={isStreaming}
+-          slotProps={{ input: { disableUnderline: true, sx: { py: 1, fontSize: '0.9rem' } } }}
+-          sx={{ minWidth: 0, flex: 1 }}
+-        />
++
++        <Box sx={{ position: 'relative', flex: 1, minWidth: 0 }}>
++          <TextField
++            inputRef={inputRef}
++            fullWidth
++            multiline
++            minRows={1}
++            maxRows={8}
++            variant="standard"
++            placeholder={
++              activeSkill
++                ? `Message (using ${activeSkill} skill)…`
++                : 'Type a message… (type / to pick a skill)'
++            }
++            value={text}
++            onChange={handleTextChange}
++            onKeyDown={handleKeyDown}
++            disabled={isStreaming}
++            slotProps={{
++              input: {
++                disableUnderline: true,
++                sx: { py: 1, fontSize: '0.9rem' },
++              },
++            }}
++            sx={{ minWidth: 0, flex: 1 }}
++          />
++
++          {/* Skill autocomplete popper */}
++          <Popper
++            id="skill-autocomplete-popper"
++            open={showSkillPicker}
++            anchorEl={inputAnchorRef.current}
++            placement="top-start"
++            sx={{ zIndex: 1300, width: inputAnchorRef.current?.offsetWidth ?? 320 }}
++          >
++            <Paper
++              ref={popperRef}
++              sx={{
++                maxHeight: 250,
++                overflow: 'auto',
++                border: '1px solid',
++                borderColor: 'divider',
++                boxShadow: 3,
++              }}
++            >
++              {isLoading ? (
++                <Typography sx={{ p: 2, textAlign: 'center', color: 'text.secondary', fontSize: '0.8rem' }}>
++                  Loading skills…
++                </Typography>
++              ) : filteredSkills.length === 0 ? (
++                <Typography sx={{ p: 2, textAlign: 'center', color: 'text.secondary', fontSize: '0.8rem' }}>
++                  {skillFilter ? 'No matching skills' : 'No skills available'}
++                </Typography>
++              ) : (
++                <List dense disablePadding>
++                  <Typography
++                    sx={{
++                      px: 2,
++                      py: 0.75,
++                      fontSize: '0.7rem',
++                      fontWeight: 600,
++                      color: 'text.secondary',
++                      textTransform: 'uppercase',
++                      letterSpacing: 0.5,
++                    }}
++                  >
++                    Skills ({filteredSkills.length})
++                  </Typography>
++                  {filteredSkills.map((skill: SkillInfo) => (
++                    <ListItemButton
++                      key={`${skill.category}:${skill.name}`}
++                      onMouseDown={(e) => {
++                        // preventDefault stops the input from losing focus (which would
++                        // trigger the outside-click handler and close the picker before
++                        // the click fires — classic autocomplete race condition)
++                        e.preventDefault();
++                        handleSkillSelect(skill.name);
++                      }}
++                      sx={{ py: 0.5, px: 2 }}
++                    >
++                      <ListItemText
++                        primary={skill.name}
++                        secondary={skill.category}
++                        primaryTypographyProps={{ fontSize: '0.85rem', fontWeight: 500 }}
++                        secondaryTypographyProps={{ fontSize: '0.72rem' }}
++                      />
++                    </ListItemButton>
++                  ))}
++                </List>
++              )}
++            </Paper>
++          </Popper>
++        </Box>
++
+         <IconButton
+           onClick={handleSend}
+           disabled={(!text.trim() && pendingFiles.length === 0) || isStreaming}

@@ -42,18 +42,19 @@ All kits are under `kits/`. Each is a self-contained `kit.md` with YAML frontmat
 | # | Kit | What it does | Dependencies | Backup status |
 |---|---|---|---|---|
 | 1 | **[hermes-api-server](kits/hermes-api-server/kit.md)** | Deploy a remote Hermes Agent API server exposing an OpenAI-compatible HTTP AP... | | |
-| 2 | **[hermes-install](kits/hermes-install/kit.md)** | Install Hermes Agent from scratch on a new macOS machine — pip, pipx, or Home... | | |
-| 3 | **[hermes-mcp-remote-bridge](kits/hermes-mcp-bridge/kit.md)** | Bridge two Hermes Agent instances over SSH stdio via the MCP protocol — givin... | | |
-| 4 | **[hermes-networking](kits/hermes-networking/kit.md)** | End-to-end cross-machine Hermes networking — Tailscale userspace VPN mesh, SS... | | |
-| 5 | **[hermes-profiles](kits/hermes-profiles/kit.md)** | Set up all 3 Hermes profiles (default, novelist, team-manager) with their uni... | | |
-| 6 | **[hermes-webui](kits/hermes-webui/kit.md)** | Fresh install and launchd daemonization of nesquena/hermes-webui with remote ... | | |
-| 7 | **[model-providers](kits/model-providers/kit.md)** | Document and restore all Hermes model provider configurations — Copilot (GitH... | | |
-| 8 | **[novel-os](kits/novel-os/kit.md)** | Install, restore, and integrate Novel-OS — a multi-agent fiction writing fram... | | |
-| 9 | **[profile-oauth-setup](kits/profile-oauth-setup/kit.md)** | Full OAuth credential setup for a Hermes profile — Google services (Drive, Gm... | | |
-| 10 | **[security-hardening-suite](kits/security-hardening/kit.md)** | Lock down a Hermes Agent with Tirith custom rules, smart approvals mode, and ... | | |
-| 11 | **[session-indexer-daemon](kits/session-indexer-daemon/kit.md)** | Bridges Hermes CLI/TUI sessions from state.db into the WebUI session index — ... | | |
-| 12 | **[ssh-key-auth](kits/ssh-key-auth/kit.md)** | Set up SSH key-based authentication between two machines for cross-machine He... | | |
-| 13 | **[tailscale-userspace](kits/tailscale-userspace/kit.md)** | Set up Tailscale in userspace (no-root) mode for cross-machine Hermes agent m... | | |
+| 2 | **[hermes-client](kits/hermes-client/kit.md)** | Install lotsoftick/hermes_client web UI and apply the skill-picker patch to e... | | |
+| 3 | **[hermes-install](kits/hermes-install/kit.md)** | Install Hermes Agent from scratch on a new macOS machine — pip, pipx, or Home... | | |
+| 4 | **[hermes-mcp-remote-bridge](kits/hermes-mcp-bridge/kit.md)** | Bridge two Hermes Agent instances over SSH stdio via the MCP protocol — givin... | | |
+| 5 | **[hermes-networking](kits/hermes-networking/kit.md)** | End-to-end cross-machine Hermes networking — Tailscale userspace VPN mesh, SS... | | |
+| 6 | **[hermes-profiles](kits/hermes-profiles/kit.md)** | Set up all 3 Hermes profiles (default, novelist, team-manager) with their uni... | | |
+| 7 | **[hermes-webui](kits/hermes-webui/kit.md)** | Fresh install and launchd daemonization of nesquena/hermes-webui with remote ... | | |
+| 8 | **[model-providers](kits/model-providers/kit.md)** | Document and restore all Hermes model provider configurations — Copilot (GitH... | | |
+| 9 | **[novel-os](kits/novel-os/kit.md)** | Install, restore, and integrate Novel-OS — a multi-agent fiction writing fram... | | |
+| 10 | **[profile-oauth-setup](kits/profile-oauth-setup/kit.md)** | Full OAuth credential setup for a Hermes profile — Google services (Drive, Gm... | | |
+| 11 | **[security-hardening-suite](kits/security-hardening/kit.md)** | Lock down a Hermes Agent with Tirith custom rules, smart approvals mode, and ... | | |
+| 12 | **[session-indexer-daemon](kits/session-indexer-daemon/kit.md)** | Bridges Hermes CLI/TUI sessions from state.db into the WebUI session index — ... | | |
+| 13 | **[ssh-key-auth](kits/ssh-key-auth/kit.md)** | Set up SSH key-based authentication between two machines for cross-machine He... | | |
+| 14 | **[tailscale-userspace](kits/tailscale-userspace/kit.md)** | Set up Tailscale in userspace (no-root) mode for cross-machine Hermes agent m... | | |
 <!-- KIT-TABLE:END -->
 
 ### What each icon means for restoration:
@@ -75,17 +76,23 @@ For a complete restoration on a new machine, run kits in this order:
  6. tailscale-userspace        (mesh: VPN daemon)
  7. ssh-key-auth               (access: passwordless SSH)
  8. hermes-webui               (UI: Web frontend + Tailscale remote access)
- 9. session-indexer-daemon     (sync: bridges CLI sessions to WebUI)  ← requires 8
-10. hermes-mcp-bridge          (tools: remote messaging)  ← requires 6+7
-11. hermes-api-server          (agent: full remote API)    ← requires 6+7
-12. hermes-networking          (orchestrator: references kits 6–11)
-13. security-hardening         (safety: lock it down)
+ 9. hermes-client              (UI: Alternative web UI with skill picker — OPTIONAL)
+10. session-indexer-daemon     (sync: bridges CLI sessions to WebUI)  ← requires 8
+11. hermes-mcp-bridge          (tools: remote messaging)  ← requires 6+7
+12. hermes-api-server          (agent: full remote API)    ← requires 6+7
+13. hermes-networking          (orchestrator: references kits 6–12)
+14. security-hardening         (safety: lock it down)
 ```
 
 Kits 4 and 5 are optional — skip if you don't need OAuth or novel writing.
-Kit 9 requires the WebUI (kit 8) — run after hermes-webui is live.
-Kits 10 and 11 can be done independently once 6+7 are in place.
-Kit 12 is a reference umbrella — run after kits 6-11 to verify the full networking stack.
+Kit 9 (`hermes-client`) is **optional** — an alternative web UI based on
+[lotsoftick/hermes_client](https://github.com/lotsoftick/hermes_client) with a community
+patch that adds a `/` skill selector to the chat input. It is work-in-progress and may
+have minor bugs. It runs independently on `:18888`/`:18889` and does not conflict with
+`hermes-webui`.
+Kit 10 requires the WebUI (kit 8) — run after hermes-webui is live.
+Kits 11 and 12 can be done independently once 6+7 are in place.
+Kit 13 is a reference umbrella — run after kits 6-12 to verify the full networking stack.
 
 ---
 
